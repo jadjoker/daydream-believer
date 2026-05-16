@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+from typing import Optional
 from services import simulator_service
 import asyncio
 
@@ -47,6 +48,70 @@ def add_funds(req: FundsRequest):
 @router.post("/reset")
 def reset():
     return simulator_service.reset()
+
+
+@router.get("/recurring")
+def get_recurring():
+    return simulator_service.get_recurring_plans()
+
+
+class RecurringAddRequest(BaseModel):
+    ticker: str
+    name: str = ""
+    amount: float
+    frequency: str
+    start_date: str
+    backfill: bool = False
+
+
+class RecurringExecuteRequest(BaseModel):
+    price: float
+    name: str = ""
+
+
+@router.post("/recurring/add")
+async def add_recurring(req: RecurringAddRequest):
+    from datetime import date as dt
+    today = dt.today().strftime("%Y-%m-%d")
+
+    if req.frequency not in ("weekly", "biweekly", "monthly"):
+        raise HTTPException(400, "Frequency must be weekly, biweekly, or monthly")
+    if req.amount <= 0:
+        raise HTTPException(400, "Amount must be > 0")
+
+    plan = simulator_service.add_recurring_plan(
+        req.ticker, req.name, req.amount, req.frequency, req.start_date
+    )
+
+    backfill_result = None
+    if req.backfill and req.start_date < today:
+        from services import yahoo_finance as yf_svc
+        try:
+            ohlcv = await yf_svc.get_ohlcv_range(req.ticker.upper(), req.start_date, today)
+            if ohlcv and len(ohlcv) >= 2:
+                backfill_result = simulator_service.backfill_recurring_plan(plan["id"], ohlcv)
+            else:
+                backfill_result = {"ok": False, "error": "Not enough historical data to backfill"}
+        except Exception as e:
+            backfill_result = {"ok": False, "error": str(e)}
+
+    return {
+        "plans": simulator_service.get_recurring_plans(),
+        "backfill": backfill_result,
+    }
+
+
+@router.post("/recurring/execute/{plan_id}")
+def execute_recurring(plan_id: int, req: RecurringExecuteRequest):
+    result = simulator_service.execute_recurring_plan(plan_id, req.price, req.name)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "Execute failed"))
+    return result
+
+
+@router.delete("/recurring/{plan_id}")
+def delete_recurring(plan_id: int):
+    return simulator_service.delete_recurring_plan(plan_id)
 
 
 @router.get("/dca")

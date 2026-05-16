@@ -168,7 +168,234 @@ def add_funds(amount: float) -> Dict:
 def reset() -> Dict:
     state = {"cash": 100_000.0, "startingBalance": 100_000.0, "positions": {}, "trades": []}
     _write(state)
+    _init_recurring()
+    with _conn() as c:
+        c.execute("UPDATE recurring_plans SET active=0")
+        c.commit()
     return state
+
+
+# ─── Recurring Investment Plans ───────────────────────────────────────────────
+
+def _init_recurring():
+    with _conn() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS recurring_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                amount REAL NOT NULL,
+                frequency TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                last_executed_date TEXT,
+                total_invested REAL NOT NULL DEFAULT 0,
+                num_executions INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.commit()
+
+
+def _next_due_date(frequency: str, last_date: str) -> str:
+    import calendar
+    from datetime import date as dt, timedelta
+    d = dt.fromisoformat(last_date)
+    if frequency == "weekly":
+        d = d + timedelta(days=7)
+    elif frequency == "biweekly":
+        d = d + timedelta(days=14)
+    else:  # monthly
+        month = d.month % 12 + 1
+        year = d.year + (1 if d.month == 12 else 0)
+        max_day = calendar.monthrange(year, month)[1]
+        d = dt(year, month, min(d.day, max_day))
+    return d.strftime("%Y-%m-%d")
+
+
+def get_recurring_plans() -> List[Dict]:
+    _init_recurring()
+    from datetime import date as dt
+    today = dt.today().strftime("%Y-%m-%d")
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM recurring_plans WHERE active=1 ORDER BY created_at DESC"
+        ).fetchall()
+    plans = []
+    for row in rows:
+        plan = dict(row)
+        last = plan.get("last_executed_date")
+        next_due = _next_due_date(plan["frequency"], last) if last else plan["start_date"]
+        plan["next_due_date"] = next_due
+        plan["is_due"] = next_due <= today
+        plans.append(plan)
+    return plans
+
+
+def add_recurring_plan(ticker: str, name: str, amount: float, frequency: str, start_date: str) -> Dict:
+    _init_recurring()
+    with _conn() as c:
+        cur = c.execute("""
+            INSERT INTO recurring_plans (ticker, name, amount, frequency, start_date, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (ticker.upper(), name, amount, frequency, start_date, datetime.now(timezone.utc).isoformat()))
+        c.commit()
+        plan_id = cur.lastrowid
+    plans = get_recurring_plans()
+    return next((p for p in plans if p["id"] == plan_id), {})
+
+
+def backfill_recurring_plan(plan_id: int, ohlcv: List[Dict]) -> Dict:
+    """Execute all historical buys from a plan's start date using real OHLCV prices."""
+    _init_recurring()
+    with _conn() as c:
+        row = c.execute("SELECT * FROM recurring_plans WHERE id=?", (plan_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": "Plan not found"}
+
+    plan = dict(row)
+    frequency = plan["frequency"]
+    start_date = plan["start_date"]
+    amount = plan["amount"]
+    ticker = plan["ticker"]
+    name = plan["name"]
+
+    prices = {r["date"]: r["close"] for r in ohlcv if r["date"] >= start_date}
+    dates = sorted(prices.keys())
+    if not dates:
+        return {"ok": False, "error": "No price data for backfill range"}
+
+    # Same schedule logic as compute_dca
+    def is_buy_date(idx: int) -> bool:
+        if idx == 0:
+            return True
+        if frequency == "weekly":
+            return idx % 5 == 0
+        if frequency == "biweekly":
+            return idx % 10 == 0
+        if frequency == "monthly":
+            return idx % 21 == 0
+        return False
+
+    purchase_dates = [d for i, d in enumerate(dates) if is_buy_date(i)]
+    if not purchase_dates:
+        return {"ok": False, "error": "No purchase dates found in range"}
+
+    state = _read()
+    total_invested = float(plan.get("total_invested") or 0)
+    num_executions = int(plan.get("num_executions") or 0)
+    last_executed = plan.get("last_executed_date")
+    executions = []
+
+    for pd in purchase_dates:
+        price = prices[pd]
+        if price <= 0:
+            continue
+        shares = amount / price
+        total = round(shares * price, 4)
+
+        t_upper = ticker.upper()
+        pos = state["positions"].get(t_upper, {
+            "ticker": t_upper, "name": name, "shares": 0.0, "avgCost": 0.0, "openTradeIds": [],
+        })
+        new_shares = pos["shares"] + shares
+        new_avg = (pos["shares"] * pos["avgCost"] + shares * price) / new_shares
+        trade_id = _uid()
+
+        state["positions"][t_upper] = {
+            **pos,
+            "name": name,
+            "shares": round(new_shares, 6),
+            "avgCost": round(new_avg, 6),
+            "openTradeIds": pos.get("openTradeIds", []) + [trade_id],
+        }
+        state["cash"] = round(state["cash"] - total, 4)
+        state["trades"].append({
+            "id": trade_id, "ticker": t_upper, "name": name,
+            "action": "buy", "shares": round(shares, 6), "price": round(price, 4), "total": total,
+            "timestamp": pd + "T09:30:00+00:00",
+            "thesis": f"DCA {frequency} · backfill",
+            "isDca": True, "planId": plan_id,
+        })
+        total_invested += amount
+        num_executions += 1
+        last_executed = pd
+        executions.append({"date": pd, "price": round(price, 4), "shares": round(shares, 6), "total": total})
+
+    state["trades"] = sorted(state["trades"], key=lambda t: t["timestamp"], reverse=True)
+    _write(state)
+
+    with _conn() as c:
+        c.execute("""
+            UPDATE recurring_plans SET last_executed_date=?, total_invested=?, num_executions=?
+            WHERE id=?
+        """, (last_executed, round(total_invested, 4), num_executions, plan_id))
+        c.commit()
+
+    cash_warning = state["cash"] < 0
+    return {
+        "ok": True,
+        "executions": executions,
+        "total_invested": round(total_invested, 4),
+        "num_executions": num_executions,
+        "cash_warning": cash_warning,
+        "state": state,
+    }
+
+
+def execute_recurring_plan(plan_id: int, price: float, name: str) -> Dict:
+    """Execute the next due buy at current live price."""
+    _init_recurring()
+    from datetime import date as dt
+    today = dt.today().strftime("%Y-%m-%d")
+
+    with _conn() as c:
+        row = c.execute("SELECT * FROM recurring_plans WHERE id=? AND active=1", (plan_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": "Plan not found"}
+
+    plan = dict(row)
+    last = plan.get("last_executed_date")
+    next_due = _next_due_date(plan["frequency"], last) if last else plan["start_date"]
+
+    if next_due > today:
+        return {"ok": False, "error": f"Next buy not due until {next_due}"}
+
+    if price <= 0:
+        return {"ok": False, "error": "Invalid price"}
+
+    amount = plan["amount"]
+    ticker = plan["ticker"]
+    shares = amount / price
+    result = buy(ticker, name or plan["name"], shares, price, f"DCA {plan['frequency']}")
+    if not result.get("ok"):
+        return result
+
+    state = result["state"]
+    if state["trades"]:
+        state["trades"][0]["isDca"] = True
+        state["trades"][0]["planId"] = plan_id
+        _write(state)
+
+    total_invested = float(plan.get("total_invested") or 0) + amount
+    num_executions = int(plan.get("num_executions") or 0) + 1
+
+    with _conn() as c:
+        c.execute("""
+            UPDATE recurring_plans SET last_executed_date=?, total_invested=?, num_executions=?
+            WHERE id=?
+        """, (today, round(total_invested, 4), num_executions, plan_id))
+        c.commit()
+
+    return {"ok": True, "state": state, "shares_bought": round(shares, 6), "price": price}
+
+
+def delete_recurring_plan(plan_id: int) -> Dict:
+    _init_recurring()
+    with _conn() as c:
+        c.execute("UPDATE recurring_plans SET active=0 WHERE id=?", (plan_id,))
+        c.commit()
+    return {"ok": True}
 
 
 def compute_dca(

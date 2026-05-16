@@ -84,6 +84,21 @@ export const api = {
     apiFetch("/simulator/add-funds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount }) }),
   simulatorReset: () =>
     apiFetch("/simulator/reset", { method: "POST" }),
+  recurringPlans: () => apiFetch("/simulator/recurring"),
+  recurringAdd: (body: {
+    ticker: string; name?: string; amount: number; frequency: string;
+    start_date: string; backfill?: boolean;
+  }) => apiFetch("/simulator/recurring/add", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }),
+  recurringExecute: (planId: number, price: number, name?: string) =>
+    apiFetch(`/simulator/recurring/execute/${planId}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ price, name: name ?? "" }),
+    }),
+  recurringDelete: (planId: number) =>
+    apiFetch(`/simulator/recurring/${planId}`, { method: "DELETE" }),
+
   simulatorDca: (params: {
     ticker: string;
     start: string;

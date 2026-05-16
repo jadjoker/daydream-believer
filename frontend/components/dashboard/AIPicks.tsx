@@ -291,9 +291,10 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
 
   const investment = Math.max(0, parseFloat(amount) || 0);
   const midEntry = pick.entry_low && pick.entry_high ? (pick.entry_low + pick.entry_high) / 2 : 0;
-  const shares = midEntry > 0 && investment > 0 ? Math.floor(investment / midEntry) : 0;
+  // Use fractional shares — most brokers support this and avoids "0 shares" for high-priced stocks
+  const shares = midEntry > 0 && investment > 0 ? +(investment / midEntry).toFixed(6) : 0;
   const cost = shares * midEntry;
-  const leftover = investment - cost;
+  const leftover = 0; // no leftover with fractional shares
 
   const gainAtTarget  = shares > 0 && pick.target    ? shares * (pick.target - midEntry)    : 0;
   const lossAtStop    = shares > 0 && pick.stop_loss  ? shares * (midEntry - pick.stop_loss) : 0;
@@ -323,8 +324,8 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
         </div>
         {shares > 0 && (
           <span className="text-xs text-zinc-600 tabular-nums">
-            → {shares} shares @ {formatPrice(midEntry)}
-            {leftover > 0.01 && ` · $${leftover.toFixed(2)} left over`}
+            → {shares < 1 ? shares.toFixed(4) : shares.toFixed(2)} shares @ {formatPrice(midEntry)}
+            <span className="text-zinc-700 ml-1">(fractional)</span>
           </span>
         )}
       </div>

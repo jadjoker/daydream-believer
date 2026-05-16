@@ -91,6 +91,13 @@ export function useSimulator() {
     } catch {}
   }, []);
 
+  const refetch = useCallback(async () => {
+    try {
+      const next = await api.simulatorState() as SimulatorState;
+      setState(next);
+    } catch {}
+  }, []);
+
   const closedTrades = state.trades.filter((t) => t.action === "sell");
   const wins = closedTrades.filter((t) => t.outcome === "win").length;
   const losses = closedTrades.filter((t) => t.outcome === "loss").length;
@@ -108,6 +115,7 @@ export function useSimulator() {
     sell,
     addFunds,
     reset,
+    refetch,
     stats: { wins, losses, winRate, totalRealizedPnl, avgWinPct, avgLossPct, totalTrades: closedTrades.length },
   };
 }

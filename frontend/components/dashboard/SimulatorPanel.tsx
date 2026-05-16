@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSimulator } from "@/hooks/useSimulator";
 import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
@@ -11,17 +11,17 @@ import { Badge } from "@/components/ui/Badge";
 import {
   TrendingUp, TrendingDown, DollarSign, Target, RefreshCw,
   PlusCircle, History, BarChart2, AlertCircle, CheckCircle2, XCircle,
-  CalendarDays,
+  CalendarDays, Repeat2, Trash2, Play, TrendingUp as ForecastIcon,
 } from "lucide-react";
 
 interface SimulatorPanelProps {
   ticker: string;
 }
 
-type View = "trade" | "portfolio" | "history" | "accuracy" | "dca";
+type View = "trade" | "portfolio" | "history" | "accuracy" | "dca" | "recurring";
 
 export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
-  const { state, loading, buy, sell, addFunds, reset, stats } = useSimulator();
+  const { state, loading, buy, sell, addFunds, reset, refetch, stats } = useSimulator();
   const [view, setView] = useState<View>("trade");
 
   const { data: quote } = useData(
@@ -45,6 +45,7 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
     { id: "history", label: "History", icon: <History size={13} /> },
     { id: "accuracy", label: "Accuracy", icon: <Target size={13} /> },
     { id: "dca", label: "DCA", icon: <CalendarDays size={13} /> },
+    { id: "recurring", label: "Recurring", icon: <Repeat2 size={13} /> },
   ];
 
   return (
@@ -121,6 +122,9 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
       )}
       {view === "dca" && (
         <DCAView defaultTicker={ticker} />
+      )}
+      {view === "recurring" && (
+        <RecurringView defaultTicker={ticker} onStateChange={refetch} />
       )}
     </div>
   );
@@ -685,11 +689,39 @@ function AccuracyView({ stats, trades }: { stats: any; trades: any[] }) {
   );
 }
 
-// ─── DCA View ─────────────────────────────────────────────────────────────────
+// ─── DCA View (Historical backtest + Compound Forecast toggle) ────────────────
 
 type DCAFreq = "weekly" | "biweekly" | "monthly" | "none";
 
 function DCAView({ defaultTicker }: { defaultTicker: string }) {
+  const [dcaMode, setDcaMode] = useState<"historical" | "forecast">("historical");
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1">
+        {(["historical", "forecast"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setDcaMode(m)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              dcaMode === m
+                ? "bg-zinc-800 text-zinc-100 border border-zinc-700"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            {m === "historical" ? "Historical Backtest" : "Compound Forecast"}
+          </button>
+        ))}
+      </div>
+      {dcaMode === "historical" ? (
+        <DCAHistoricalView defaultTicker={defaultTicker} />
+      ) : (
+        <CompoundForecastView defaultTicker={defaultTicker} />
+      )}
+    </div>
+  );
+}
+
+function DCAHistoricalView({ defaultTicker }: { defaultTicker: string }) {
   const today = new Date().toISOString().slice(0, 10);
   const fiveYearsAgo = new Date(Date.now() - 5 * 365.25 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -917,6 +949,399 @@ function DCAView({ defaultTicker }: { defaultTicker: string }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Compound Forecast View ───────────────────────────────────────────────────
+
+function CompoundForecastView({ defaultTicker }: { defaultTicker: string }) {
+  const [initial, setInitial] = useState("10000");
+  const [monthly, setMonthly] = useState("500");
+  const [years, setYears] = useState("10");
+  const [customRate, setCustomRate] = useState("");
+
+  const P = Math.max(0, parseFloat(initial) || 0);
+  const PMT = Math.max(0, parseFloat(monthly) || 0);
+  const N = Math.max(1, Math.min(50, parseInt(years) || 10));
+  const numMonths = N * 12;
+
+  const SCENARIOS = [
+    { label: "Conservative", rate: 0.05, color: "#f59e0b", textCls: "text-amber-400" },
+    { label: "Moderate",     rate: 0.08, color: "#22d3ee", textCls: "text-cyan-400" },
+    { label: "Aggressive",   rate: 0.12, color: "#10b981", textCls: "text-emerald-400" },
+  ];
+  const customRateNum = parseFloat(customRate);
+  const scenarios = customRate && !isNaN(customRateNum) && customRateNum > 0
+    ? [...SCENARIOS, { label: "Custom", rate: customRateNum / 100, color: "#a78bfa", textCls: "text-violet-400" }]
+    : SCENARIOS;
+
+  function generateSeries(annualRate: number) {
+    const r = annualRate / 12;
+    const data: { month: number; value: number; invested: number }[] = [];
+    let value = P;
+    let invested = P;
+    for (let m = 0; m <= numMonths; m++) {
+      if (m > 0) {
+        value = value * (1 + r) + PMT;
+        invested += PMT;
+      }
+      data.push({ month: m, value: Math.round(value), invested: Math.round(invested) });
+    }
+    return data;
+  }
+
+  const seriesData = scenarios.map((s) => ({ ...s, data: generateSeries(s.rate) }));
+  const totalInvested = P + PMT * numMonths;
+
+  // SVG chart
+  const W = 400; const H = 130; const PAD = 10;
+  const allVals = seriesData.flatMap((s) => s.data.map((d) => d.value));
+  const maxV = Math.max(...allVals, totalInvested, 1);
+  const minV = 0;
+  const range = maxV - minV;
+  const toX = (m: number) => PAD + (m / numMonths) * (W - PAD * 2);
+  const toY = (v: number) => H - PAD - ((v - minV) / range) * (H - PAD * 2);
+  const makePath = (data: typeof seriesData[0]["data"]) =>
+    data.map((d, i) => `${i === 0 ? "M" : "L"} ${toX(d.month).toFixed(1)} ${toY(d.value).toFixed(1)}`).join(" ");
+  const investedPath = seriesData[0].data
+    .map((d, i) => `${i === 0 ? "M" : "L"} ${toX(d.month).toFixed(1)} ${toY(d.invested).toFixed(1)}`)
+    .join(" ");
+
+  return (
+    <div className="space-y-4">
+      <Card title="Compound Growth Forecast">
+        <div className="text-xs text-zinc-500 mb-3 leading-relaxed">
+          Projects future portfolio value using a fixed annual return rate. Not a prediction — use this to visualize how consistent investing compounds over time.
+        </div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Initial ($)</label>
+              <input type="number" min="0" step="1000" value={initial}
+                onChange={(e) => setInitial(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Monthly ($)</label>
+              <input type="number" min="0" step="100" value={monthly}
+                onChange={(e) => setMonthly(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Years</label>
+              <input type="number" min="1" max="50" step="1" value={years}
+                onChange={(e) => setYears(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500 block mb-1">Custom annual return % (optional)</label>
+            <input type="number" min="0" max="100" step="0.5" placeholder="e.g. 15" value={customRate}
+              onChange={(e) => setCustomRate(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+          </div>
+        </div>
+      </Card>
+
+      <Card title={`${N}-Year Projections`} titleRight={
+        <span className="text-xs text-zinc-600">Total invested: ${formatNum(totalInvested, 0)}</span>
+      }>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+          {seriesData.map((s) => {
+            const final = s.data[s.data.length - 1];
+            const gain = final.value - final.invested;
+            const gainPct = final.invested > 0 ? (gain / final.invested) * 100 : 0;
+            return (
+              <div key={s.label} className="bg-zinc-800/50 rounded-xl p-3 border border-zinc-700/40">
+                <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">{s.label} ({(s.rate * 100).toFixed(0)}%/yr)</div>
+                <div className={`text-xl font-bold tabular-nums ${s.textCls}`}>${formatNum(final.value, 0)}</div>
+                <div className="text-xs text-zinc-500 mt-0.5">
+                  +${formatNum(gain, 0)} gain · +{gainPct.toFixed(0)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* SVG chart */}
+        <div className="overflow-x-auto">
+          <svg viewBox={`0 0 ${W} ${H + 28}`} className="w-full" style={{ minWidth: "260px" }}>
+            <path d={investedPath} fill="none" stroke="#52525b" strokeWidth="1.2" strokeDasharray="3 2" />
+            {seriesData.map((s) => (
+              <path key={s.label} d={makePath(s.data)} fill="none" stroke={s.color} strokeWidth={s.label === "Moderate" ? 2 : 1.5} opacity="0.85" />
+            ))}
+            {/* Legend */}
+            {seriesData.map((s, i) => {
+              const final = s.data[s.data.length - 1];
+              const x = PAD + i * ((W - PAD * 2) / seriesData.length);
+              return (
+                <g key={s.label}>
+                  <circle cx={x + 4} cy={H + 11} r="3" fill={s.color} />
+                  <text x={x + 10} y={H + 15} fill="#a1a1aa" fontSize="8.5">
+                    {s.label} ${(final.value / 1000).toFixed(0)}K
+                  </text>
+                </g>
+              );
+            })}
+            <line x1={W - 58} y1={H + 9} x2={W - 52} y2={H + 9} stroke="#52525b" strokeWidth="1.2" strokeDasharray="2 2" />
+            <text x={W - 49} y={H + 14} fill="#71717a" fontSize="8.5">Invested ${(totalInvested / 1000).toFixed(0)}K</text>
+          </svg>
+        </div>
+
+        <p className="text-[10px] text-zinc-600 italic mt-2">
+          Assumes constant annual return, monthly compounding, contributions at start of each month. Past market returns don't guarantee future results.
+        </p>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Recurring Investment Plans ───────────────────────────────────────────────
+
+function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string; onStateChange: () => void }) {
+  const [plans, setPlans] = useState<any[]>([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
+
+  // Form state
+  const [ticker, setTicker] = useState(defaultTicker.toUpperCase());
+  const [amount, setAmount] = useState("500");
+  const [frequency, setFrequency] = useState("monthly");
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [backfill, setBackfill] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<any>(null);
+  const [executing, setExecuting] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const isPastStart = startDate < today;
+
+  const loadPlans = useCallback(async () => {
+    setPlansLoading(true);
+    try {
+      const data = await api.recurringPlans() as any[];
+      setPlans(data ?? []);
+    } catch { setPlans([]); }
+    finally { setPlansLoading(false); }
+  }, []);
+
+  useEffect(() => { loadPlans(); }, [loadPlans]);
+
+  const handleAdd = async () => {
+    if (!ticker.trim() || !amount || parseFloat(amount) <= 0) {
+      setFeedback({ ok: false, msg: "Enter a valid ticker and amount." }); return;
+    }
+    setSubmitting(true); setSubmitResult(null); setFeedback(null);
+    try {
+      const res = await api.recurringAdd({
+        ticker: ticker.trim().toUpperCase(),
+        amount: parseFloat(amount),
+        frequency,
+        start_date: startDate,
+        backfill: isPastStart && backfill,
+      }) as any;
+      setPlans(res.plans ?? []);
+      setSubmitResult(res.backfill);
+      if (!res.backfill || res.backfill.ok !== false) {
+        setAddOpen(false);
+        setFeedback({
+          ok: true,
+          msg: res.backfill?.ok
+            ? `Plan added + ${res.backfill.num_executions} historical buys executed ($${formatNum(res.backfill.total_invested, 0)} invested).${res.backfill.cash_warning ? " ⚠ Cash went negative — add funds." : ""}`
+            : "Plan added. No backfill data available.",
+        });
+        onStateChange();
+      }
+    } catch (e) {
+      setFeedback({ ok: false, msg: e instanceof Error ? e.message : "Failed to add plan" });
+    } finally { setSubmitting(false); }
+  };
+
+  const handleExecute = async (plan: any) => {
+    setExecuting(plan.id);
+    try {
+      // Fetch current price first
+      const quote = await api.quote(plan.ticker) as any;
+      const price = quote?.price;
+      if (!price) { setFeedback({ ok: false, msg: `Could not fetch price for ${plan.ticker}` }); return; }
+      const res = await api.recurringExecute(plan.id, price, plan.name || plan.ticker) as any;
+      if (res.ok !== false) {
+        setFeedback({ ok: true, msg: `Bought ${res.shares_bought?.toFixed(4)} shares of ${plan.ticker} @ ${formatPrice(res.price)}` });
+        await loadPlans();
+        onStateChange();
+      } else {
+        setFeedback({ ok: false, msg: res.detail ?? "Execute failed" });
+      }
+    } catch (e) {
+      setFeedback({ ok: false, msg: e instanceof Error ? e.message : "Execute failed" });
+    } finally { setExecuting(null); }
+  };
+
+  const handleDelete = async (planId: number) => {
+    if (!confirm("Remove this recurring plan?")) return;
+    await api.recurringDelete(planId);
+    setPlans((p) => p.filter((x) => x.id !== planId));
+  };
+
+  const freqLabel = (f: string) =>
+    f === "weekly" ? "weekly" : f === "biweekly" ? "bi-weekly" : "monthly";
+
+  return (
+    <div className="space-y-4">
+      {/* Active Plans */}
+      <Card title="Recurring Investment Plans" titleRight={
+        <button
+          onClick={() => setAddOpen((o) => !o)}
+          className="flex items-center gap-1 text-xs bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 hover:bg-cyan-600/30 px-2.5 py-1 rounded-lg transition-colors"
+        >
+          <PlusCircle size={11} /> New Plan
+        </button>
+      }>
+        {/* Feedback */}
+        {feedback && (
+          <div className={`flex items-start gap-2 text-sm rounded-lg px-3 py-2 mb-3 ${feedback.ok ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
+            {feedback.ok ? <CheckCircle2 size={14} className="shrink-0 mt-0.5" /> : <AlertCircle size={14} className="shrink-0 mt-0.5" />}
+            {feedback.msg}
+          </div>
+        )}
+
+        {plansLoading && <div className="text-xs text-zinc-500 py-4 text-center">Loading plans…</div>}
+
+        {!plansLoading && plans.length === 0 && !addOpen && (
+          <div className="flex flex-col items-center py-10 text-zinc-600">
+            <Repeat2 size={28} className="mb-2 opacity-30" />
+            <p className="text-sm mb-3">No recurring plans yet.</p>
+            <button onClick={() => setAddOpen(true)} className="text-xs text-cyan-400 hover:underline">
+              + Add your first plan
+            </button>
+          </div>
+        )}
+
+        {plans.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {plans.map((plan) => (
+              <div key={plan.id} className={`rounded-xl border p-3 ${plan.is_due ? "border-emerald-800/50 bg-emerald-950/10" : "border-zinc-800"}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-bold text-cyan-400 text-sm shrink-0">{plan.ticker}</span>
+                    <span className="text-xs text-zinc-400 shrink-0">${formatNum(plan.amount, 0)} / {freqLabel(plan.frequency)}</span>
+                    {plan.is_due && (
+                      <span className="text-[10px] bg-emerald-500/15 border border-emerald-600/30 text-emerald-400 px-1.5 py-0.5 rounded shrink-0">DUE</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {plan.is_due && (
+                      <button
+                        onClick={() => handleExecute(plan)}
+                        disabled={executing === plan.id}
+                        className="flex items-center gap-1 text-xs bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2 py-1 rounded-lg transition-colors disabled:opacity-40"
+                      >
+                        <Play size={10} /> {executing === plan.id ? "Buying…" : "Execute"}
+                      </button>
+                    )}
+                    <button onClick={() => handleDelete(plan.id)} className="text-zinc-600 hover:text-red-400 transition-colors p-1">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2 text-[10px] text-zinc-500">
+                  <div>
+                    <div className="text-zinc-600 mb-0.5">Total invested</div>
+                    <div className="text-zinc-300 font-medium">${formatNum(plan.total_invested, 0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-600 mb-0.5">Executions</div>
+                    <div className="text-zinc-300 font-medium">{plan.num_executions}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-600 mb-0.5">{plan.is_due ? "⚡ Due now" : "Next buy"}</div>
+                    <div className={plan.is_due ? "text-emerald-400 font-medium" : "text-zinc-300 font-medium"}>
+                      {plan.next_due_date}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add Plan form */}
+        {addOpen && (
+          <div className="border border-zinc-700 rounded-xl p-4 space-y-3 bg-zinc-800/30">
+            <div className="text-xs font-semibold text-zinc-300 mb-1">New Recurring Plan</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-zinc-500 block mb-1">Ticker</label>
+                <input type="text" value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} maxLength={10}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 block mb-1">Frequency</label>
+                <select value={frequency} onChange={(e) => setFrequency(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500">
+                  <option value="monthly">Monthly</option>
+                  <option value="biweekly">Bi-weekly</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-zinc-500 block mb-1">Amount per buy ($)</label>
+                <input type="number" min="1" step="50" value={amount} onChange={(e) => setAmount(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 block mb-1">Start date</label>
+                <input type="date" value={startDate} max={today} onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500" />
+              </div>
+            </div>
+
+            {isPastStart && (
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={backfill} onChange={(e) => setBackfill(e.target.checked)}
+                  className="mt-0.5 accent-cyan-500" />
+                <div>
+                  <div className="text-xs text-zinc-300 font-medium">Backfill historical purchases</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">
+                    Executes every {freqLabel(frequency)} buy from {startDate} to today at real historical prices. Adds shares to your portfolio with correct cost basis and deducts from your cash.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={handleAdd}
+                disabled={submitting}
+                className="flex-1 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-600/30 transition-colors disabled:opacity-40"
+              >
+                {submitting ? (backfill && isPastStart ? "Backfilling…" : "Adding…") : "Add Plan"}
+              </button>
+              <button onClick={() => setAddOpen(false)} className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+
+            {submitResult?.ok === false && (
+              <div className="text-xs text-red-400 flex items-center gap-1">
+                <AlertCircle size={11} /> {submitResult.error}
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <p className="text-[10px] text-zinc-700 italic px-1">
+        Recurring plans execute at live prices when you click Execute. Backfill uses real historical adjusted closing prices. This is a paper trading simulator — not real money.
+      </p>
     </div>
   );
 }
