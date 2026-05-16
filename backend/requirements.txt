@@ -1,0 +1,36 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+httpx==0.28.1
+aiohttp==3.11.11
+pydantic==2.10.4
+
+# Market data
+yfinance==0.2.50
+pandas==2.2.3
+numpy==2.2.1
+
+# Reddit
+praw==7.8.1
+
+# Google Trends
+pytrends==4.9.2
+
+# RSS feeds / scraping
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Caching
+cachetools==5.5.0
+diskcache==5.6.3
+
+# Scheduling / async
+apscheduler==3.10.4
+
+# AI
+anthropic>=0.40.0
+
+# Misc
+python-dateutil==2.9.0.post0
+pytz==2024.2
