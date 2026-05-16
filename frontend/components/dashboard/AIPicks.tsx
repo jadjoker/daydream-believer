@@ -89,11 +89,6 @@ function TickerAnalysisCard({
           <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${recConf.bg} ${recConf.cls}`}>
             {recConf.icon} {recConf.label}
           </span>
-          {analysis.trade_type && (
-            <span className={`text-[11px] font-medium px-2 py-0.5 rounded border ${tradeTypeClass}`}>
-              {analysis.trade_type.replace("_", " ")}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-2">
           <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
@@ -200,9 +195,6 @@ function PickCard({
           >
             {pick.ticker}
           </button>
-          <span className={`text-[11px] font-medium px-2 py-0.5 rounded border ${tradeTypeClass}`}>
-            {pick.trade_type?.replace("_", " ")}
-          </span>
         </div>
         <div className="flex items-center gap-2">
           <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
