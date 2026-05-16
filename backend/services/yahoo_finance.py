@@ -1,3 +1,4 @@
+import os
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -31,6 +32,13 @@ def _get_info_with_retry(ticker_obj, retries: int = 2) -> dict:
 
 
 async def get_quote(ticker: str) -> Optional[Dict]:
+    # Use Finnhub as primary source when key is available — avoids Yahoo Finance rate limits
+    if os.getenv("FINNHUB_API_KEY"):
+        from services import finnhub_service
+        fh = await finnhub_service.get_quote(ticker)
+        if fh and fh.get("price"):
+            return fh
+
     def _fetch():
         try:
             t = yf.Ticker(ticker)

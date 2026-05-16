@@ -21,6 +21,40 @@ async def _get(path: str, params: dict = {}) -> Optional[dict]:
         return None
 
 
+async def get_quote(ticker: str) -> Optional[Dict]:
+    """Real-time quote via Finnhub — used as primary source when key is set."""
+    data = await _get("/quote", {"symbol": ticker})
+    if not data or not data.get("c"):
+        return None
+    price = data["c"]
+    prev  = data.get("pc") or price
+    chg   = data.get("d", 0) or 0
+    chg_p = data.get("dp", 0) or 0
+    return {
+        "ticker": ticker.upper(),
+        "name": ticker,
+        "price": round(price, 2),
+        "change": round(chg, 2),
+        "change_pct": round(chg_p, 2),
+        "volume": 0,
+        "avg_volume": None,
+        "rel_volume": None,
+        "market_cap": None,
+        "pe_ratio": None,
+        "eps": None,
+        "week_52_high": None,
+        "week_52_low": None,
+        "beta": None,
+        "short_float": None,
+        "short_ratio": None,
+        "float_shares": None,
+        "outstanding_shares": None,
+        "sector": None,
+        "industry": None,
+        "exchange": None,
+    }
+
+
 async def get_company_news(ticker: str, days_back: int = 7) -> List[Dict]:
     end = datetime.now().strftime("%Y-%m-%d")
     start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
