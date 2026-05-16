@@ -2,18 +2,14 @@ services:
   - type: web
     name: daydream-believer-api
     env: python
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ANTHROPIC_API_KEY
-        sync: false          # set this manually in Render dashboard
-      - key: DB_PATH
-        value: /data/simulator.db
+        sync: false          # paste your key in the Render dashboard
       - key: CORS_ORIGINS
-        sync: false          # set to your Vercel URL, e.g. https://daydream-believer.vercel.app
-    disk:
-      name: app-data
-      mountPath: /data
-      sizeGB: 1
+        sync: false          # paste your Vercel URL here after frontend is deployed
+      - key: DB_PATH
+        value: simulator.db  # ephemeral on free tier — resets on restart
