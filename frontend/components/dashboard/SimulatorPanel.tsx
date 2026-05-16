@@ -1169,12 +1169,7 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
       setSubmitResult(res.backfill);
       if (!res.backfill || res.backfill.ok !== false) {
         setAddOpen(false);
-        setFeedback({
-          ok: true,
-          msg: res.backfill?.ok
-            ? `Plan added + ${res.backfill.num_executions} historical buys executed ($${formatNum(res.backfill.total_invested, 0)} invested).${res.backfill.cash_warning ? " ⚠ Cash went negative — add funds." : ""}`
-            : "Plan added. No backfill data available.",
-        });
+        setFeedback({ ok: true, msg: "Plan added successfully." });
         onStateChange();
       }
     } catch (e) {

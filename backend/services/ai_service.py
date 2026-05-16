@@ -689,10 +689,16 @@ def _build_longterm_prompt(
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
     vix = market_overview.get("vix", 20)
+    ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
 
     return f"""You are an expert long-term growth and value investor. Today is {date_str}.
 
 Evaluate these stocks as 6–12 month conviction plays. Focus on business quality, fundamentals, and valuation — NOT short-term price action.
+
+TICKER IDENTITY — memorize before writing any thesis:
+{ticker_map}
+Every pick's "thesis" must reference ONLY the company name matched to that ticker above.
+Do NOT confuse similar-looking tickers with other companies.
 
 === MACRO CONTEXT ===
 SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
@@ -713,6 +719,7 @@ RULES:
 - Thesis must reference fundamental factors (revenue growth, P/E vs peers, moat, margin expansion)
 - market_summary must discuss the macro backdrop for LONG-TERM investing, not day trading
 - trade_type must be one of: growth, value, dividend, turnaround
+- CRITICAL: thesis for ticker X must ONLY describe the company named for X in the TICKER IDENTITY table above
 
 Respond ONLY with valid JSON, no markdown:
 {{
@@ -1154,11 +1161,17 @@ def _build_discovery_prompt(candidates: List[Dict], date_str: str) -> str:
             f"Stop ${c['stop_loss']:.2f} (35% below) | 10-Year Target ${c['target']:.2f} (2.5x) | R/R 1:{c['rr']}"
         )
     candidates_block = "\n".join(rows)
+    ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
 
     return f"""You are an expert venture-minded long-term investor. Today is {date_str}.
 
 Your goal: identify companies that could be 10x in 10 years — the next Google, Amazon, or Netflix.
 These are speculative long-term holds, NOT short-term trades. Volatility is expected and acceptable.
+
+TICKER IDENTITY — memorize before writing any thesis:
+{ticker_map}
+Every pick's "thesis" must reference ONLY the company name matched to that ticker above.
+Do NOT confuse similar-looking tickers (e.g. ZS=Zscaler, ZI=ZoomInfo, S=SentinelOne, NET=Cloudflare).
 
 For each pick, think about:
 - What market are they disrupting and how large is that opportunity?
@@ -1180,6 +1193,7 @@ RULES:
 - market_summary must address whether current macro conditions are favorable for building long-horizon growth positions
 - Stop losses should remain wide (30–40%) — these positions are held through volatility, not day-traded
 - Do NOT reference day-trading concepts like RSI, MACD, or short-term momentum
+- CRITICAL: thesis for ticker X must ONLY describe the company named for X in the TICKER IDENTITY table above
 
 Respond ONLY with valid JSON, no markdown:
 {{
