@@ -4,7 +4,7 @@ import SimulatorPanel from "@/components/dashboard/SimulatorPanel";
 import { useState } from "react";
 
 export default function Dashboard() {
-  const [simulatorTicker, setSimulatorTicker] = useState("AAPL");
+  const [simulatorTicker, setSimulatorTicker] = useState("");
 
   return (
     <div className="min-h-screen bg-zinc-950">

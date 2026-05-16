@@ -210,6 +210,9 @@ def _next_due_date(frequency: str, last_date: str) -> str:
         year = d.year + (1 if d.month == 12 else 0)
         max_day = calendar.monthrange(year, month)[1]
         d = dt(year, month, min(d.day, max_day))
+    # Advance past weekends to next Monday — markets are closed Sat/Sun
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
     return d.strftime("%Y-%m-%d")
 
 

@@ -288,24 +288,23 @@ function holdEstimate(pct: number, mode: "short" | "long" | "discovery" = "short
 
 function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any; mode?: "short" | "long" | "discovery"; onSimulate?: () => void }) {
   const [amount, setAmount] = useState("1000");
+  const [profitGoal, setProfitGoal] = useState("5");
 
   const investment = Math.max(0, parseFloat(amount) || 0);
+  const goalAmt = Math.max(0.01, parseFloat(profitGoal) || 5);
   const midEntry = pick.entry_low && pick.entry_high ? (pick.entry_low + pick.entry_high) / 2 : 0;
-  // Use fractional shares — most brokers support this and avoids "0 shares" for high-priced stocks
   const shares = midEntry > 0 && investment > 0 ? +(investment / midEntry).toFixed(6) : 0;
-  const cost = shares * midEntry;
-  const leftover = 0; // no leftover with fractional shares
 
-  const gainAtTarget  = shares > 0 && pick.target    ? shares * (pick.target - midEntry)    : 0;
-  const lossAtStop    = shares > 0 && pick.stop_loss  ? shares * (midEntry - pick.stop_loss) : 0;
-  const priceTo5      = shares > 0                    ? midEntry + 5 / shares                : 0;
-  const pctTo5        = midEntry > 0 && shares > 0    ? (5 / shares / midEntry) * 100        : 0;
-  const pctToTarget   = midEntry > 0 && pick.target   ? ((pick.target - midEntry) / midEntry) * 100 : 0;
-  const returnPct     = midEntry > 0 && pick.target   ? ((pick.target - midEntry) / midEntry * 100).toFixed(1) : "—";
+  const gainAtTarget = shares > 0 && pick.target    ? shares * (pick.target - midEntry)    : 0;
+  const lossAtStop   = shares > 0 && pick.stop_loss ? shares * (midEntry - pick.stop_loss) : 0;
+  const priceToGoal  = shares > 0                   ? midEntry + goalAmt / shares           : 0;
+  const pctToGoal    = midEntry > 0 && shares > 0   ? (goalAmt / shares / midEntry) * 100   : 0;
+  const pctToTarget  = midEntry > 0 && pick.target  ? ((pick.target - midEntry) / midEntry) * 100 : 0;
+  const returnPct    = midEntry > 0 && pick.target  ? ((pick.target - midEntry) / midEntry * 100).toFixed(1) : "—";
 
   return (
     <div className="px-4 pb-4 pt-3 bg-zinc-950/70 border-t border-cyan-900/30 space-y-3">
-      {/* Header + input */}
+      {/* Header + inputs */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs font-semibold text-zinc-300">Return Estimator</span>
         <div className="flex items-center gap-1.5">
@@ -313,10 +312,7 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
           <div className="relative">
             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
             <input
-              type="number"
-              min="0"
-              step="100"
-              value={amount}
+              type="number" min="0" step="100" value={amount}
               onChange={(e) => setAmount(e.target.value)}
               className="w-28 pl-5 pr-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-cyan-600 tabular-nums"
             />
@@ -325,7 +321,6 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
         {shares > 0 && (
           <span className="text-xs text-zinc-600 tabular-nums">
             → {shares < 1 ? shares.toFixed(4) : shares.toFixed(2)} shares @ {formatPrice(midEntry)}
-            <span className="text-zinc-700 ml-1">(fractional)</span>
           </span>
         )}
       </div>
@@ -334,12 +329,23 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
         <>
           {/* Three checkpoints */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            {/* $5 return */}
+            {/* Customisable profit goal */}
             <div className="bg-zinc-900 rounded-lg p-3 border border-cyan-900/30">
-              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">Hit $5 profit when</div>
-              <div className="text-sm font-bold text-cyan-300 tabular-nums">{formatPrice(priceTo5)}</div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                Hit
+                <div className="relative inline-flex items-center">
+                  <span className="absolute left-1.5 text-[10px] text-zinc-500 pointer-events-none">$</span>
+                  <input
+                    type="number" min="0.01" step="1" value={profitGoal}
+                    onChange={(e) => setProfitGoal(e.target.value)}
+                    className="w-14 pl-4 pr-1 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-cyan-300 focus:outline-none focus:border-cyan-600 tabular-nums"
+                  />
+                </div>
+                profit when
+              </div>
+              <div className="text-sm font-bold text-cyan-300 tabular-nums">{formatPrice(priceToGoal)}</div>
               <div className="text-[10px] text-zinc-500 mt-1">
-                +{pctTo5.toFixed(2)}% move · est. <span className="text-zinc-400">{holdEstimate(pctTo5, mode)}</span>
+                +{pctToGoal.toFixed(2)}% move · est. <span className="text-zinc-400">{holdEstimate(pctToGoal, mode)}</span>
               </div>
             </div>
 
@@ -359,20 +365,18 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
             <div className="bg-zinc-900 rounded-lg p-3 border border-red-900/30">
               <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">Stop loss risk ({formatPrice(pick.stop_loss)})</div>
               <div className="text-sm font-bold text-red-400 tabular-nums">−${lossAtStop.toFixed(2)}</div>
-              <div className="text-[10px] text-zinc-500 mt-1">
-                max loss if stop is hit
-              </div>
+              <div className="text-[10px] text-zinc-500 mt-1">max loss if stop is hit</div>
             </div>
           </div>
 
-          {/* Minimum to make $5 hint */}
           {pctToTarget > 0 && (
             <p className="text-[10px] text-zinc-600">
-              Min to make $5 at target: <span className="text-zinc-400 tabular-nums">${(5 / (pctToTarget / 100)).toFixed(2)}</span>
+              Min to make ${goalAmt % 1 === 0 ? goalAmt.toFixed(0) : goalAmt.toFixed(2)} at target:{" "}
+              <span className="text-zinc-400 tabular-nums">${(goalAmt / (pctToTarget / 100)).toFixed(2)}</span>
               {mode === "discovery"
-                ? " · These are multi-year holds. Short-term volatility is expected — conviction in the 10-year thesis matters more than price action."
+                ? " · Multi-year holds — conviction in the thesis matters more than short-term price action."
                 : mode === "long"
-                  ? " · Hold estimates are based on the target % move — actual timing depends on fundamentals and macro catalysts."
+                  ? " · Hold estimates based on target % move — actual timing depends on fundamentals."
                   : " · Hold estimates are rough — momentum plays often resolve faster than swing setups."}
             </p>
           )}

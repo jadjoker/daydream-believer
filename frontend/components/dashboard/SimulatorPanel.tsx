@@ -25,9 +25,9 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
   const [view, setView] = useState<View>("trade");
 
   const { data: quote } = useData(
-    () => api.quote(ticker) as Promise<any>,
+    () => ticker ? api.quote(ticker) as Promise<any> : Promise.resolve(null),
     [ticker],
-    { refreshInterval: 30000 }
+    { refreshInterval: ticker ? 30000 : 0 }
   );
 
   const currentPrice = quote?.price ?? 0;
@@ -142,6 +142,27 @@ function TradeView({
   buy: any;
   sell: any;
 }) {
+  if (!ticker) {
+    return (
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <Card title="Trade">
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-600">
+            <TrendingUp size={32} className="mb-3 opacity-30" />
+            <p className="text-sm text-zinc-500">No stock selected</p>
+            <p className="text-xs text-zinc-600 mt-1 text-center max-w-[200px]">
+              Click a ticker or "Simulate →" from an AI pick to start trading
+            </p>
+          </div>
+        </Card>
+        <Card title="Position">
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-600">
+            <BarChart2 size={32} className="mb-2 opacity-30" />
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   const [action, setAction] = useState<"buy" | "sell">("buy");
   const [shares, setShares] = useState("");
   const [stopLoss, setStopLoss] = useState("");
@@ -1113,14 +1134,12 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
     d.setFullYear(d.getFullYear() - 1);
     return d.toISOString().slice(0, 10);
   });
-  const [backfill, setBackfill] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<any>(null);
   const [executing, setExecuting] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const today = new Date().toISOString().slice(0, 10);
-  const isPastStart = startDate < today;
 
   const loadPlans = useCallback(async () => {
     setPlansLoading(true);
@@ -1144,7 +1163,7 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
         amount: parseFloat(amount),
         frequency,
         start_date: startDate,
-        backfill: isPastStart && backfill,
+        backfill: false,
       }) as any;
       setPlans(res.plans ?? []);
       setSubmitResult(res.backfill);
@@ -1304,26 +1323,13 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
               </div>
             </div>
 
-            {isPastStart && (
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input type="checkbox" checked={backfill} onChange={(e) => setBackfill(e.target.checked)}
-                  className="mt-0.5 accent-cyan-500" />
-                <div>
-                  <div className="text-xs text-zinc-300 font-medium">Backfill historical purchases</div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5">
-                    Executes every {freqLabel(frequency)} buy from {startDate} to today at real historical prices. Adds shares to your portfolio with correct cost basis and deducts from your cash.
-                  </div>
-                </div>
-              </label>
-            )}
-
             <div className="flex gap-2 pt-1">
               <button
                 onClick={handleAdd}
                 disabled={submitting}
                 className="flex-1 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-600/30 transition-colors disabled:opacity-40"
               >
-                {submitting ? (backfill && isPastStart ? "Backfilling…" : "Adding…") : "Add Plan"}
+                {submitting ? "Adding…" : "Add Plan"}
               </button>
               <button onClick={() => setAddOpen(false)} className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
                 Cancel
