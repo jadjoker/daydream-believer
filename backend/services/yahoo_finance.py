@@ -126,6 +126,27 @@ async def get_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> L
     return await _run_sync(_fetch)
 
 
+async def get_ohlcv_range(ticker: str, start: str, end: str) -> List[Dict]:
+    """Fetch daily OHLCV for a date range (YYYY-MM-DD strings). Lighter than t.info."""
+    def _fetch():
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(start=start, end=end, interval="1d", auto_adjust=True)
+            if hist.empty:
+                return []
+            return [
+                {
+                    "date": ts.strftime("%Y-%m-%d"),
+                    "close": round(float(row["Close"]), 4),
+                }
+                for ts, row in hist.iterrows()
+            ]
+        except Exception as e:
+            print(f"[YF] get_ohlcv_range error for {ticker}: {e}")
+            return []
+    return await _run_sync(_fetch)
+
+
 async def get_options_chain(ticker: str) -> Optional[Dict]:
     def _fetch():
         try:

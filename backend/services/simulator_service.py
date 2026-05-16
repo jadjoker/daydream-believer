@@ -3,8 +3,9 @@ import json
 import sqlite3
 import random
 import string
-from typing import Dict
-from datetime import datetime, timezone
+from typing import Dict, List, Optional
+from datetime import datetime, timezone, date as date_type
+import math
 
 DB_PATH = os.getenv(
     "DB_PATH",
@@ -168,3 +169,125 @@ def reset() -> Dict:
     state = {"cash": 100_000.0, "startingBalance": 100_000.0, "positions": {}, "trades": []}
     _write(state)
     return state
+
+
+def compute_dca(
+    ohlcv: List[Dict],
+    spy_ohlcv: List[Dict],
+    initial: float,
+    recurring: float,
+    frequency: str,   # "weekly" | "biweekly" | "monthly" | "none"
+) -> Optional[Dict]:
+    """
+    Simulate dollar-cost averaging over historical price data.
+    Returns a portfolio growth series plus a SPY buy-and-hold comparison.
+    """
+    if not ohlcv:
+        return None
+
+    # Build date → close price lookups
+    prices = {row["date"]: row["close"] for row in ohlcv}
+    spy_prices = {row["date"]: row["close"] for row in spy_ohlcv}
+    dates = sorted(prices.keys())
+    if not dates:
+        return None
+
+    # Determine purchase dates based on frequency
+    def is_purchase_date(date_str: str, idx: int) -> bool:
+        if frequency == "none":
+            return idx == 0
+        if idx == 0:
+            return True  # always buy on first date (initial)
+        if frequency == "weekly":
+            # every 5 trading days ≈ 1 week
+            return idx % 5 == 0
+        if frequency == "biweekly":
+            return idx % 10 == 0
+        if frequency == "monthly":
+            return idx % 21 == 0
+        return False
+
+    # Simulate ticker DCA
+    shares = 0.0
+    total_invested = 0.0
+    portfolio_series: List[Dict] = []
+
+    for idx, d in enumerate(dates):
+        price = prices[d]
+        if is_purchase_date(d, idx):
+            amount = initial if idx == 0 else recurring
+            if amount > 0 and price > 0:
+                new_shares = amount / price
+                shares += new_shares
+                total_invested += amount
+
+        portfolio_value = round(shares * price, 2)
+        portfolio_series.append({
+            "date": d,
+            "value": portfolio_value,
+            "invested": round(total_invested, 2),
+        })
+
+    # Simulate SPY buy-and-hold with same cash flows
+    spy_dates = sorted(spy_prices.keys())
+    spy_shares = 0.0
+    spy_total_invested = 0.0
+    spy_series: List[Dict] = []
+    spy_date_set = set(spy_dates)
+
+    for idx, d in enumerate(dates):
+        # Find closest SPY price (same date or next available)
+        spy_price = spy_prices.get(d)
+        if spy_price is None:
+            # use last known SPY price
+            for prev_d in reversed(dates[:idx]):
+                if prev_d in spy_prices:
+                    spy_price = spy_prices[prev_d]
+                    break
+        if spy_price is None:
+            spy_series.append({"date": d, "value": 0.0, "invested": 0.0})
+            continue
+
+        if is_purchase_date(d, idx):
+            amount = initial if idx == 0 else recurring
+            if amount > 0 and spy_price > 0:
+                spy_shares += amount / spy_price
+                spy_total_invested += amount
+
+        spy_series.append({
+            "date": d,
+            "value": round(spy_shares * spy_price, 2),
+            "invested": round(spy_total_invested, 2),
+        })
+
+    final = portfolio_series[-1] if portfolio_series else None
+    spy_final = spy_series[-1] if spy_series else None
+
+    if not final or final["invested"] == 0:
+        return None
+
+    total_return_pct = round((final["value"] - final["invested"]) / final["invested"] * 100, 2)
+    spy_return_pct = round((spy_final["value"] - spy_final["invested"]) / spy_final["invested"] * 100, 2) if spy_final and spy_final["invested"] else 0
+
+    # Compute max drawdown on portfolio
+    peak = 0.0
+    max_drawdown = 0.0
+    for row in portfolio_series:
+        peak = max(peak, row["value"])
+        if peak > 0:
+            dd = (peak - row["value"]) / peak * 100
+            max_drawdown = max(max_drawdown, dd)
+
+    return {
+        "series": portfolio_series,
+        "spy_series": spy_series,
+        "total_invested": round(final["invested"], 2),
+        "final_value": final["value"],
+        "total_return_pct": total_return_pct,
+        "total_return_dollars": round(final["value"] - final["invested"], 2),
+        "spy_final_value": spy_final["value"] if spy_final else 0,
+        "spy_return_pct": spy_return_pct,
+        "spy_return_dollars": round((spy_final["value"] - spy_final["invested"]) if spy_final else 0, 2),
+        "max_drawdown_pct": round(max_drawdown, 2),
+        "num_purchases": sum(1 for i, d in enumerate(dates) if is_purchase_date(d, i)),
+    }

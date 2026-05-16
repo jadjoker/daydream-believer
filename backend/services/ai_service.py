@@ -431,11 +431,12 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def _call_claude(prompt: str) -> str:
+def _call_claude(prompt: str, max_tokens: int = 1800) -> str:
     client = _get_client()
+    model = os.getenv("AI_MODEL", "claude-haiku-4-5-20251001")
     msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1800,
+        model=model,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text
@@ -501,7 +502,9 @@ async def generate_market_picks(
 
 # ─── Long-term universe + screening ──────────────────────────────────────────
 
-# Curated pool of quality names across sectors — the kind you'd actually hold 6-12 months
+# Curated pool of individual stocks — the kind you'd actually hold 6-12 months.
+# ETFs are intentionally excluded: SPY/QQQ/etc. are baskets, not individual businesses,
+# and their fundamentals (P/E, revenue) are meaningless at the fund level.
 LONGTERM_UNIVERSE = [
     # Mega-cap tech / AI
     "AAPL", "MSFT", "GOOGL", "NVDA", "META", "AMZN", "TSLA", "AMD",
@@ -996,7 +999,9 @@ Respond ONLY with valid JSON, no markdown:
 
 # ─── Discovery universe (10+ year speculative plays) ─────────────────────────
 
-# Small/mid-cap disruptors with genuine 10-year thesis potential
+# Small/mid-cap individual disruptors with genuine 10-year thesis potential.
+# ETFs are excluded — they are baskets and their fund-level fundamentals
+# are meaningless for the kind of 10-year disruptive thesis we want here.
 DISCOVERY_UNIVERSE = [
     # AI & data infrastructure
     "PLTR", "NET", "DDOG", "SNOW", "MDB", "GTLB", "PATH", "SOUN", "AI",

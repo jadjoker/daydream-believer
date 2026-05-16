@@ -121,7 +121,7 @@ async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discover
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "Anthropic account has no credits. Add credits at console.anthropic.com/settings/billing")
+            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
         raise HTTPException(500, f"AI picks failed: {e}")
 
 
@@ -145,5 +145,5 @@ async def analyze_ticker(ticker: str, mode: str = Query("short", pattern="^(shor
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "Anthropic account has no credits.")
+            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
         raise HTTPException(500, f"Ticker analysis failed: {e}")

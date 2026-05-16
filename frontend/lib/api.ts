@@ -5,7 +5,15 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     next: { revalidate: 0 },
     ...options,
   });
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
+  if (!res.ok) {
+    // Try to extract the detail message from FastAPI's error body
+    let detail: string | undefined;
+    try {
+      const body = await res.json();
+      detail = body?.detail;
+    } catch {}
+    throw new Error(detail ?? `API ${path} → ${res.status}`);
+  }
   return res.json();
 }
 
@@ -73,4 +81,22 @@ export const api = {
     apiFetch("/simulator/add-funds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount }) }),
   simulatorReset: () =>
     apiFetch("/simulator/reset", { method: "POST" }),
+  simulatorDca: (params: {
+    ticker: string;
+    start: string;
+    end: string;
+    initial: number;
+    recurring: number;
+    frequency: "weekly" | "biweekly" | "monthly" | "none";
+  }) => {
+    const q = new URLSearchParams({
+      ticker: params.ticker,
+      start: params.start,
+      end: params.end,
+      initial: String(params.initial),
+      recurring: String(params.recurring),
+      frequency: params.frequency,
+    }).toString();
+    return apiFetch(`/simulator/dca?${q}`);
+  },
 };

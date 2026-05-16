@@ -11,13 +11,14 @@ import { Badge } from "@/components/ui/Badge";
 import {
   TrendingUp, TrendingDown, DollarSign, Target, RefreshCw,
   PlusCircle, History, BarChart2, AlertCircle, CheckCircle2, XCircle,
+  CalendarDays,
 } from "lucide-react";
 
 interface SimulatorPanelProps {
   ticker: string;
 }
 
-type View = "trade" | "portfolio" | "history" | "accuracy";
+type View = "trade" | "portfolio" | "history" | "accuracy" | "dca";
 
 export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
   const { state, loading, buy, sell, addFunds, reset, stats } = useSimulator();
@@ -43,6 +44,7 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
     { id: "portfolio", label: "Portfolio", icon: <BarChart2 size={13} /> },
     { id: "history", label: "History", icon: <History size={13} /> },
     { id: "accuracy", label: "Accuracy", icon: <Target size={13} /> },
+    { id: "dca", label: "DCA", icon: <CalendarDays size={13} /> },
   ];
 
   return (
@@ -116,6 +118,9 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
       )}
       {view === "accuracy" && (
         <AccuracyView stats={stats} trades={state.trades} />
+      )}
+      {view === "dca" && (
+        <DCAView defaultTicker={ticker} />
       )}
     </div>
   );
@@ -676,6 +681,274 @@ function AccuracyView({ stats, trades }: { stats: any; trades: any[] }) {
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+// ─── DCA View ─────────────────────────────────────────────────────────────────
+
+type DCAFreq = "weekly" | "biweekly" | "monthly" | "none";
+
+function DCAView({ defaultTicker }: { defaultTicker: string }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const fiveYearsAgo = new Date(Date.now() - 5 * 365.25 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  const [ticker, setTicker] = useState(defaultTicker.toUpperCase());
+  const [start, setStart] = useState(fiveYearsAgo);
+  const [end, setEnd] = useState(today);
+  const [initial, setInitial] = useState("10000");
+  const [recurring, setRecurring] = useState("500");
+  const [frequency, setFrequency] = useState<DCAFreq>("monthly");
+  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRun = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.simulatorDca({
+        ticker: ticker.trim().toUpperCase(),
+        start,
+        end,
+        initial: parseFloat(initial) || 0,
+        recurring: parseFloat(recurring) || 0,
+        frequency,
+      }) as any;
+      setResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "DCA simulation failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const beat = result ? result.total_return_pct > result.spy_return_pct : false;
+
+  return (
+    <div className="space-y-4">
+      <Card title="DCA Return Estimator">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Ticker</label>
+              <input
+                type="text"
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                maxLength={10}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Frequency</label>
+              <select
+                value={frequency}
+                onChange={(e) => setFrequency(e.target.value as DCAFreq)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500"
+              >
+                <option value="monthly">Monthly</option>
+                <option value="biweekly">Bi-weekly</option>
+                <option value="weekly">Weekly</option>
+                <option value="none">One-time only</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Start Date</label>
+              <input
+                type="date"
+                value={start}
+                onChange={(e) => setStart(e.target.value)}
+                max={end}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">End Date</label>
+              <input
+                type="date"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+                min={start}
+                max={today}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">Initial ($)</label>
+              <input
+                type="number"
+                min="0"
+                step="500"
+                value={initial}
+                onChange={(e) => setInitial(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 block mb-1">
+                Recurring ($){frequency !== "none" && <span className="text-zinc-600 ml-1">per {frequency.replace("ly", "")}</span>}
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="100"
+                value={recurring}
+                onChange={(e) => setRecurring(e.target.value)}
+                disabled={frequency === "none"}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-cyan-500 disabled:opacity-40"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={handleRun}
+            disabled={loading || !ticker.trim()}
+            className="w-full py-2.5 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 rounded-xl font-semibold text-sm hover:bg-cyan-600/30 transition-colors disabled:opacity-40 active:bg-cyan-600/40"
+          >
+            {loading ? "Running simulation…" : "Run DCA Simulation"}
+          </button>
+
+          {error && (
+            <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2.5">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+              {error}
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {result && !loading && (
+        <>
+          <Card title={`${result.ticker} Results`} titleRight={
+            <span className={`text-xs font-semibold ${beat ? "text-emerald-400" : "text-red-400"}`}>
+              {beat ? "✓ Beat SPY" : "✗ Underperformed SPY"}
+            </span>
+          }>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <StatCard
+                label="Final Value"
+                value={`$${formatNum(result.final_value, 2)}`}
+                valueClass={colorClass(result.total_return_dollars)}
+                sub={`${result.total_return_dollars >= 0 ? "+" : ""}$${formatNum(result.total_return_dollars, 2)}`}
+              />
+              <StatCard
+                label="Total Return"
+                value={formatPct(result.total_return_pct)}
+                valueClass={colorClass(result.total_return_pct)}
+              />
+              <StatCard
+                label="Total Invested"
+                value={`$${formatNum(result.total_invested, 2)}`}
+                valueClass="text-zinc-300"
+                sub={`${result.num_purchases} purchases`}
+              />
+              <StatCard
+                label="Max Drawdown"
+                value={`-${result.max_drawdown_pct.toFixed(1)}%`}
+                valueClass="text-red-400"
+              />
+            </div>
+
+            <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2">
+              <div className="text-xs text-zinc-500 uppercase tracking-wider mb-2">vs SPY (same cash flows)</div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">{result.ticker}</span>
+                <span className={`font-bold tabular-nums ${colorClass(result.total_return_pct)}`}>
+                  {formatPct(result.total_return_pct)} &rarr; ${formatNum(result.final_value, 0)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">SPY</span>
+                <span className={`font-bold tabular-nums ${colorClass(result.spy_return_pct)}`}>
+                  {formatPct(result.spy_return_pct)} &rarr; ${formatNum(result.spy_final_value, 0)}
+                </span>
+              </div>
+              <div className="space-y-1 pt-1">
+                {[
+                  { label: result.ticker, pct: result.total_return_pct, color: "bg-cyan-500" },
+                  { label: "SPY", pct: result.spy_return_pct, color: "bg-amber-500" },
+                ].map(({ label, pct, color }) => {
+                  const maxAbs = Math.max(Math.abs(result.total_return_pct), Math.abs(result.spy_return_pct), 1);
+                  const w = Math.min(100, (Math.abs(pct) / maxAbs) * 100);
+                  return (
+                    <div key={label}>
+                      <div className="flex justify-between text-[10px] text-zinc-600 mb-0.5">
+                        <span>{label}</span><span>{formatPct(pct)}</span>
+                      </div>
+                      <div className="h-2 bg-zinc-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${pct >= 0 ? color : "bg-red-500"}`} style={{ width: `${w}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <p className="text-[10px] text-zinc-600 italic mt-3">
+              Uses adjusted closing prices. Past performance ≠ future results. Not financial advice.
+            </p>
+          </Card>
+
+          {result.series?.length > 1 && (
+            <Card title="Growth Chart">
+              <MiniChart series={result.series} spySeries={result.spy_series} ticker={result.ticker} />
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MiniChart({ series, spySeries, ticker }: { series: any[]; spySeries: any[]; ticker: string }) {
+  const W = 400;
+  const H = 120;
+  const PAD = 8;
+
+  const allVals = [...series.map((s: any) => s.value), ...spySeries.map((s: any) => s.value)];
+  const minV = Math.min(...allVals, 0);
+  const maxV = Math.max(...allVals, 1);
+  const range = maxV - minV || 1;
+
+  const toX = (i: number, total: number) => PAD + (i / Math.max(total - 1, 1)) * (W - PAD * 2);
+  const toY = (v: number) => H - PAD - ((v - minV) / range) * (H - PAD * 2);
+
+  const makePath = (data: any[]) =>
+    data.map((row: any, i: number) =>
+      `${i === 0 ? "M" : "L"} ${toX(i, data.length).toFixed(1)} ${toY(row.value).toFixed(1)}`
+    ).join(" ");
+
+  const investedPath = series.map((row: any, i: number) =>
+    `${i === 0 ? "M" : "L"} ${toX(i, series.length).toFixed(1)} ${toY(row.invested).toFixed(1)}`
+  ).join(" ");
+
+  const lastTicker = series[series.length - 1];
+  const lastSpy = spySeries[spySeries.length - 1];
+
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H + 22}`} className="w-full" style={{ minWidth: "260px" }}>
+        <path d={investedPath} fill="none" stroke="#52525b" strokeWidth="1" strokeDasharray="3 2" />
+        {spySeries.length > 1 && (
+          <path d={makePath(spySeries)} fill="none" stroke="#f59e0b" strokeWidth="1.5" opacity="0.8" />
+        )}
+        <path d={makePath(series)} fill="none" stroke="#22d3ee" strokeWidth="2" />
+
+        <circle cx={PAD + 4} cy={H + 11} r="3" fill="#22d3ee" />
+        <text x={PAD + 10} y={H + 15} fill="#a1a1aa" fontSize="9">{ticker} ${(lastTicker.value / 1000).toFixed(1)}K</text>
+        <circle cx={W / 2 - 10} cy={H + 11} r="3" fill="#f59e0b" />
+        <text x={W / 2 - 4} y={H + 15} fill="#a1a1aa" fontSize="9">SPY ${((lastSpy?.value ?? 0) / 1000).toFixed(1)}K</text>
+        <line x1={W - 52} y1={H + 9} x2={W - 46} y2={H + 9} stroke="#52525b" strokeWidth="1.2" strokeDasharray="2 2" />
+        <text x={W - 43} y={H + 14} fill="#71717a" fontSize="9">Invested</text>
+      </svg>
     </div>
   );
 }
