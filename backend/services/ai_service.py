@@ -1,10 +1,16 @@
 import os
 import asyncio
 import json
+import time
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+# Module-level caches — keyed screening results survive across requests
+_longterm_cache: Dict = {"ts": 0.0, "data": []}
+_discovery_cache: Dict = {"ts": 0.0, "data": []}
+_FUND_CACHE_TTL = 7200  # 2 hours — fundamentals don't change hourly
 
 
 # ─── Anthropic client ────────────────────────────────────────────────────────
@@ -217,11 +223,17 @@ async def preprocess_candidates(
     # First pass: score with screener data only, take top_n * 2 for TA fetch
     candidates = sorted(screener_results, key=lambda x: x.get("score", 0), reverse=True)[:top_n * 2]
 
-    # Fetch full technicals concurrently
-    ta_results = await asyncio.gather(
-        *[get_technical_signals(r["ticker"], period="3mo", interval="1d") for r in candidates],
-        return_exceptions=True,
-    )
+    # Reuse TA stored by the screener (avoids double Yahoo Finance fetch).
+    # Fall back to a fresh fetch only for candidates where _ta is absent.
+    ta_results: List = [r.get("_ta") for r in candidates]
+    missing = [i for i, ta in enumerate(ta_results) if ta is None]
+    if missing:
+        fresh = await asyncio.gather(
+            *[get_technical_signals(candidates[i]["ticker"], period="3mo", interval="1d") for i in missing],
+            return_exceptions=True,
+        )
+        for idx, ta in zip(missing, fresh):
+            ta_results[idx] = ta if isinstance(ta, dict) else None
 
     enriched = []
     for result, ta in zip(candidates, ta_results):
@@ -576,13 +588,18 @@ def _score_longterm(fund: Dict, price: float) -> float:
 
 async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
     """
-    Fetch live fundamentals for the curated universe, score each stock on
-    fundamental quality, return the top N as prompt-ready candidates.
+    Fetch fundamentals for the curated universe via Finnhub (no Yahoo 429 risk),
+    score on fundamental quality, cache for 2 hours. Returns top N candidates.
     """
+    now = time.time()
+    if _longterm_cache["ts"] and (now - _longterm_cache["ts"]) < _FUND_CACHE_TTL and _longterm_cache["data"]:
+        return _longterm_cache["data"][:top_n]
+
     from services import yahoo_finance as yf_svc
+    from services import finnhub_service
 
     quote_results = await _batch_gather([yf_svc.get_quote(t) for t in LONGTERM_UNIVERSE], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([yf_svc.get_fundamentals(t) for t in LONGTERM_UNIVERSE], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in LONGTERM_UNIVERSE], batch_size=3, delay=0.5)
 
     candidates = []
     for ticker, quote, fund in zip(LONGTERM_UNIVERSE, quote_results, fund_results):
@@ -630,6 +647,8 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
+    _longterm_cache["ts"] = time.time()
+    _longterm_cache["data"] = candidates
     return candidates[:top_n]
 
 
@@ -867,11 +886,12 @@ Respond ONLY with valid JSON, no markdown:
 async def _analyze_ticker_longterm(ticker: str) -> Dict:
     from services.technical_analysis import get_technical_signals
     from services import yahoo_finance as yf_svc
+    from services import finnhub_service
 
     quote, ta, fund = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1wk"),
-        yf_svc.get_fundamentals(ticker),
+        finnhub_service.get_fundamentals_mapped(ticker),
         return_exceptions=True,
     )
 
@@ -1045,11 +1065,16 @@ def _score_discovery(fund: Dict, price: float) -> float:
 
 
 async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
-    """Fetch live fundamentals for the discovery universe and return top scored candidates."""
+    """Fetch Finnhub fundamentals for the discovery universe, cache 2 hours, return top scored candidates."""
+    now = time.time()
+    if _discovery_cache["ts"] and (now - _discovery_cache["ts"]) < _FUND_CACHE_TTL and _discovery_cache["data"]:
+        return _discovery_cache["data"][:top_n]
+
     from services import yahoo_finance as yf_svc
+    from services import finnhub_service
 
     quote_results = await _batch_gather([yf_svc.get_quote(t) for t in DISCOVERY_UNIVERSE], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([yf_svc.get_fundamentals(t) for t in DISCOVERY_UNIVERSE], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in DISCOVERY_UNIVERSE], batch_size=3, delay=0.5)
 
     candidates = []
     for ticker, quote, fund in zip(DISCOVERY_UNIVERSE, quote_results, fund_results):
@@ -1093,6 +1118,8 @@ async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
+    _discovery_cache["ts"] = time.time()
+    _discovery_cache["data"] = candidates
     return candidates[:top_n]
 
 
@@ -1160,10 +1187,11 @@ Respond ONLY with valid JSON, no markdown:
 async def _analyze_ticker_discovery(ticker: str) -> Dict:
     """Single-ticker analysis for the 10+ year discovery / disruptor mode."""
     from services import yahoo_finance as yf_svc
+    from services import finnhub_service
 
     quote, fund = await asyncio.gather(
         yf_svc.get_quote(ticker),
-        yf_svc.get_fundamentals(ticker),
+        finnhub_service.get_fundamentals_mapped(ticker),
         return_exceptions=True,
     )
 

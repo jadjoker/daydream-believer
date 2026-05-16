@@ -1,7 +1,8 @@
+import time
 from fastapi import APIRouter, HTTPException, Query
 from services import ai_service
 from services.screener_service import run_screener
-from services import yahoo_finance as yf_svc, stocktwits_service
+from services import yahoo_finance as yf_svc
 from services.cache_service import get_cached, set_cached
 import asyncio
 from datetime import datetime, timedelta
@@ -9,25 +10,22 @@ import pytz
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
-SECTOR_ETFS = {
-    "Technology": "XLK", "Healthcare": "XLV", "Financials": "XLF",
-    "Energy": "XLE", "Consumer Disc.": "XLY", "Consumer Staples": "XLP",
-    "Industrials": "XLI", "Materials": "XLB", "Utilities": "XLU",
-    "Real Estate": "XLRE", "Communication": "XLC",
-}
-INDEX_TICKERS = ["SPY", "QQQ", "IWM", "DIA", "^VIX"]
+# Core tickers for regime assessment — just enough for SPY/QQQ/VIX
+_REGIME_TICKERS = ["SPY", "QQQ", "IWM", "^VIX"]
+
+_snapshot_cache: dict = {"ts": 0.0, "data": None}
+_SNAPSHOT_TTL = 300  # 5 minutes
 
 
 def _next_trading_day(now: datetime) -> tuple[str, str]:
-    """Return (human_label, YYYY-MM-DD) for the next market open day."""
-    wd = now.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
-    if wd == 4:    # Friday → Monday
+    wd = now.weekday()
+    if wd == 4:
         delta = 3
-    elif wd == 5:  # Saturday → Monday
+    elif wd == 5:
         delta = 2
-    elif wd == 6:  # Sunday → Monday
+    elif wd == 6:
         delta = 1
-    else:          # Mon–Thu → tomorrow
+    else:
         delta = 1
     next_day = now + timedelta(days=delta)
     label = ("Monday" if delta > 1 else "Tomorrow") + " " + next_day.strftime("%b %d").replace(" 0", " ")
@@ -35,27 +33,28 @@ def _next_trading_day(now: datetime) -> tuple[str, str]:
 
 
 async def _build_market_snapshot() -> dict:
-    all_tickers = INDEX_TICKERS + list(SECTOR_ETFS.values())
+    """Fetch SPY/QQQ/IWM/VIX for regime assessment only. Cached 5 min."""
+    now = time.time()
+    if _snapshot_cache["ts"] and (now - _snapshot_cache["ts"]) < _SNAPSHOT_TTL and _snapshot_cache["data"]:
+        return _snapshot_cache["data"]
+
     quotes = await asyncio.gather(
-        *[yf_svc.get_quote(t) for t in all_tickers],
+        *[yf_svc.get_quote(t) for t in _REGIME_TICKERS],
         return_exceptions=True,
     )
-    idx = {t: (q if isinstance(q, dict) else None) for t, q in zip(all_tickers, quotes)}
+    idx = {t: (q if isinstance(q, dict) else None) for t, q in zip(_REGIME_TICKERS, quotes)}
 
     def pc(t):
         q = idx.get(t)
         return (q.get("price", 0), q.get("change_pct", 0)) if q else (0, 0)
 
-    sector_perf = []
-    for name, etf in SECTOR_ETFS.items():
-        p, c = pc(etf)
-        sector_perf.append({"name": name, "etf": etf, "price": p, "change_pct": c})
-    sector_perf.sort(key=lambda x: x["change_pct"], reverse=True)
+    spy_p, spy_c = pc("SPY")
+    qqq_p, qqq_c = pc("QQQ")
+    iwm_p, iwm_c = pc("IWM")
+    vix_p, vix_c = pc("^VIX")
 
-    trending = await stocktwits_service.get_trending_tickers()
-
-    now = datetime.now(pytz.timezone("US/Eastern"))
-    h, m, wd = now.hour, now.minute, now.weekday()
+    now_dt = datetime.now(pytz.timezone("US/Eastern"))
+    h, m, wd = now_dt.hour, now_dt.minute, now_dt.weekday()
     if wd >= 5:
         status = "closed"
     elif (h == 9 and m >= 30) or (10 <= h <= 15) or (h == 16 and m == 0):
@@ -67,34 +66,33 @@ async def _build_market_snapshot() -> dict:
     else:
         status = "closed"
 
-    spy_p, spy_c = pc("SPY")
-    qqq_p, qqq_c = pc("QQQ")
-    iwm_p, iwm_c = pc("IWM")
-    vix_p, vix_c = pc("^VIX")
-
-    return {
+    result = {
         "spy_price": spy_p, "spy_change_pct": spy_c,
         "qqq_price": qqq_p, "qqq_change_pct": qqq_c,
         "iwm_price": iwm_p, "iwm_change_pct": iwm_c,
         "vix": vix_p, "vix_change_pct": vix_c,
-        "sector_performance": sector_perf,
-        "trending_tickers": trending[:10],
+        "sector_performance": [],
+        "trending_tickers": [],
         "market_status": status,
     }
+    _snapshot_cache["ts"] = time.time()
+    _snapshot_cache["data"] = result
+    return result
 
 
 @router.get("/picks")
 async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discovery)$")):
-    """Generate Claude-powered stock picks. mode=short (day trade) or mode=long (12-month)."""
     cache_key = f"ai_picks_{mode}"
     cached = get_cached(cache_key)
     if cached is not None:
         return cached
     try:
-        market_data, screener_data = await asyncio.gather(
-            _build_market_snapshot(),
-            run_screener(min_rel_volume=1.0, sort_by="score", limit=20),
-        )
+        # Sequential: market snapshot first (4 Finnhub calls, cached 5 min),
+        # then screener (Finnhub quotes + batched Yahoo Finance TA).
+        # Prevents the burst of 60+ simultaneous calls that kills free-tier limits.
+        market_data = await _build_market_snapshot()
+        screener_data = await run_screener(min_rel_volume=1.0, sort_by="score", limit=20) if mode == "short" else []
+
         now = datetime.now(pytz.timezone("US/Eastern"))
         date_str = now.strftime("%Y-%m-%d %H:%M ET")
         next_trading_day_label, next_trading_day_date = _next_trading_day(now)
@@ -129,11 +127,10 @@ async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discover
 
 @router.get("/analyze/{ticker}")
 async def analyze_ticker(ticker: str, mode: str = Query("short", pattern="^(short|long|discovery)$")):
-    """Analyze a single ticker. mode=short (next open) or mode=long (6-12 month hold)."""
+    """Analyze a single ticker on demand. API call fires only when user submits."""
     try:
         now = datetime.now(pytz.timezone("US/Eastern"))
         next_trading_day_label, _ = _next_trading_day(now)
-        # Long-term analysis doesn't need market snapshot (fundamentals-focused)
         market_data = {} if mode in ("long", "discovery") else await _build_market_snapshot()
         result = await ai_service.analyze_ticker(
             ticker=ticker.upper().strip(),

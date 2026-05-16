@@ -151,3 +151,66 @@ async def get_basic_financials(ticker: str) -> Optional[Dict]:
 
 async def get_market_news_sentiment(ticker: str) -> Optional[Dict]:
     return await _get("/news-sentiment", {"symbol": ticker})
+
+
+async def get_fundamentals_mapped(ticker: str) -> Optional[Dict]:
+    """
+    Fetch Finnhub basic financials and normalize to the same schema as
+    yf_svc.get_fundamentals() so all scoring functions work unchanged.
+    Replaces Yahoo Finance t.info calls — no 429 risk.
+    """
+    data = await get_basic_financials(ticker)
+    if not data:
+        return None
+    m = data.get("metric") or {}
+    if not m:
+        return None
+
+    def pct(key: str):
+        """Finnhub reports percentages as whole numbers (45.6 → 0.456)."""
+        v = m.get(key)
+        return round(v / 100, 6) if v is not None else None
+
+    # Prefer most recent (quarterly YoY), fall back to trailing/3Y
+    rev_growth = pct("revenueGrowthQuarterlyYoy") or pct("revenueGrowthTTMYoy") or pct("revenueGrowth3Y")
+    eps_growth = pct("epsGrowthQuarterlyYoy") or pct("epsGrowthTTMYoy") or pct("epsGrowth3Y")
+
+    # FCF: Finnhub reports in USD millions — multiply to get absolute dollars
+    fcf_m = m.get("freeCashFlowTTM") or m.get("freeCashFlowAnnual")
+    free_cashflow = fcf_m * 1_000_000 if fcf_m is not None else None
+
+    return {
+        "ticker": ticker.upper(),
+        "pe_ratio": m.get("peBasicExclExtraTTM") or m.get("peNormalizedAnnual"),
+        "forward_pe": m.get("peNormalizedAnnual"),  # best free-tier approximation
+        "peg_ratio": None,                           # Finnhub premium only
+        "ps_ratio": m.get("priceToSalesTTM") or m.get("priceToSalesQuarterly"),
+        "pb_ratio": m.get("priceToBookQuarterly"),
+        "ev_ebitda": None,
+        "profit_margin": pct("netProfitMarginTTM") or pct("netProfitMarginAnnual"),
+        "operating_margin": pct("operatingMarginTTM") or pct("operatingMarginAnnual"),
+        "roe": pct("roeTTM") or pct("roeAnnual"),
+        "roa": pct("roaAnnual"),
+        "revenue": None,
+        "revenue_growth": rev_growth,
+        "earnings_growth": eps_growth,
+        "gross_margins": pct("grossMarginTTM") or pct("grossMarginAnnual"),
+        "debt_to_equity": m.get("totalDebt/totalEquityAnnual"),
+        "current_ratio": m.get("currentRatioAnnual") or m.get("currentRatioQuarterly"),
+        "quick_ratio": None,
+        "free_cashflow": free_cashflow,
+        "dividend_yield": pct("dividendYieldIndicatedAnnual"),
+        "payout_ratio": pct("payoutRatioAnnual"),
+        "book_value": m.get("bookValuePerShareAnnual"),
+        "eps_trailing": m.get("epsNormalizedAnnual"),
+        "eps_forward": None,
+        "analyst_rating": None,
+        "analyst_count": None,
+        "target_price": None,
+        "target_low": None,
+        "target_high": None,
+        "short_float": None,
+        "short_ratio": None,
+        "insider_pct": None,
+        "institution_pct": None,
+    }

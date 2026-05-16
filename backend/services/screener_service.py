@@ -89,6 +89,7 @@ async def _run_screener_fresh(universe: List[str]) -> List[Dict]:
             "sector": q.get("sector"),
             "score": score,
             "signals": signals[:4],
+            "_ta": ta,  # full TA dict — consumed by preprocess_candidates to avoid double-fetch
         })
     return out
 
