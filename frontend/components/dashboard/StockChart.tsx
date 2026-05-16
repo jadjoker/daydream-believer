@@ -1,5 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import {
+  createChart, ColorType, CrosshairMode,
+  CandlestickSeries, HistogramSeries, LineSeries,
+} from "lightweight-charts";
 import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice, colorClass } from "@/lib/utils";
@@ -20,7 +24,10 @@ function calcSMA(bars: any[], n: number) {
   for (let i = n - 1; i < bars.length; i++) {
     let sum = 0;
     for (let j = i - n + 1; j <= i; j++) sum += bars[j].close;
-    out.push({ time: Math.floor(new Date(bars[i].timestamp).getTime() / 1000), value: +(sum / n).toFixed(4) });
+    out.push({
+      time: Math.floor(new Date(bars[i].timestamp).getTime() / 1000),
+      value: +(sum / n).toFixed(4),
+    });
   }
   return out;
 }
@@ -32,16 +39,9 @@ interface StockChartProps {
 }
 
 export default function StockChart({ ticker, price, changePct }: StockChartProps) {
-  const chartRef        = useRef<HTMLDivElement>(null);
-  const chartInst       = useRef<any>(null);
-  const mainSeriesRef   = useRef<any>(null);
-  const volumeSeriesRef = useRef<any>(null);
-  const ma20Ref         = useRef<any>(null);
-  const ma50Ref         = useRef<any>(null);
-  const ma200Ref        = useRef<any>(null);
-  const hoveredRef      = useRef<any>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
 
-  const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[3]); // 3M default
+  const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[3]);
   const [chartType, setChartType]           = useState<"candle" | "line">("candle");
   const [showMA20, setShowMA20]             = useState(true);
   const [showMA50, setShowMA50]             = useState(true);
@@ -54,146 +54,104 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
     { refreshInterval: 60000 },
   );
 
-  // Initialize chart (runs once per mount)
+  // Single effect — creates chart, sets data, and cleans up.
+  // Runs whenever data or display settings change.
   useEffect(() => {
-    if (!chartRef.current) return;
-    let destroyed = false;
-    let observer: ResizeObserver | null = null;
+    const bars = data?.bars;
+    if (!chartRef.current || !bars?.length) return;
 
-    import("lightweight-charts").then(({
-      createChart, ColorType, CrosshairMode, CandlestickSeries, HistogramSeries, LineSeries,
-    }) => {
-      if (destroyed || !chartRef.current) return;
-
-      const chart = createChart(chartRef.current, {
-        width:  chartRef.current.clientWidth,
-        height: 340,
-        layout: {
-          background: { type: ColorType.Solid, color: "#0c0c0e" },
-          textColor: "#71717a",
-          fontSize: 11,
-        },
-        grid: {
-          vertLines: { color: "#1c1c1f" },
-          horzLines: { color: "#1c1c1f" },
-        },
-        crosshair: { mode: CrosshairMode.Normal },
-        rightPriceScale: { borderColor: "#27272a", textColor: "#71717a" },
-        timeScale:       { borderColor: "#27272a", timeVisible: true, secondsVisible: false },
-      });
-
-      // Volume (bottom 18% overlay)
-      const volumeSeries = chart.addSeries(HistogramSeries, {
-        priceFormat:  { type: "volume" },
-        priceScaleId: "volume",
-      });
-      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-
-      // Main price series
-      let mainSeries: any;
-      if (chartType === "candle") {
-        mainSeries = chart.addSeries(CandlestickSeries, {
-          upColor:        "#34d399",
-          downColor:      "#f87171",
-          borderUpColor:  "#34d399",
-          borderDownColor:"#f87171",
-          wickUpColor:    "#34d399",
-          wickDownColor:  "#f87171",
-        });
-      } else {
-        mainSeries = chart.addSeries(LineSeries, {
-          color:             "#22d3ee",
-          lineWidth:         2,
-          priceLineVisible:  false,
-        });
-      }
-
-      // MA series
-      const addMALine = (color: string) => chart.addSeries(LineSeries, {
-        color,
-        lineWidth:            1,
-        priceLineVisible:     false,
-        lastValueVisible:     false,
-        crosshairMarkerVisible: false,
-      });
-
-      const ma20Series  = showMA20  ? addMALine("#fbbf24") : null;
-      const ma50Series  = showMA50  ? addMALine("#a78bfa") : null;
-      const ma200Series = showMA200 ? addMALine("#f87171") : null;
-
-      chartInst.current       = chart;
-      mainSeriesRef.current   = mainSeries;
-      volumeSeriesRef.current = volumeSeries;
-      ma20Ref.current         = ma20Series;
-      ma50Ref.current         = ma50Series;
-      ma200Ref.current        = ma200Series;
-
-      // OHLC hover tooltip
-      chart.subscribeCrosshairMove((param: any) => {
-        if (!param.time) { hoveredRef.current = null; setHovered(null); return; }
-        const d = param.seriesData.get(mainSeries);
-        hoveredRef.current = d ?? null;
-        setHovered(d ?? null);
-      });
-
-      observer = new ResizeObserver(() => {
-        if (chartRef.current && !destroyed) {
-          chart.applyOptions({ width: chartRef.current.clientWidth });
-        }
-      });
-      observer.observe(chartRef.current);
+    const chart = createChart(chartRef.current, {
+      width:  chartRef.current.clientWidth,
+      height: 340,
+      layout: {
+        background: { type: ColorType.Solid, color: "#0c0c0e" },
+        textColor: "#71717a",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "#1c1c1f" },
+        horzLines: { color: "#1c1c1f" },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#27272a", textColor: "#71717a" },
+      timeScale:       { borderColor: "#27272a", timeVisible: true, secondsVisible: false },
     });
 
-    return () => {
-      destroyed = true;
-      observer?.disconnect();
-      if (chartInst.current) {
-        chartInst.current.remove();
-        chartInst.current       = null;
-        mainSeriesRef.current   = null;
-        volumeSeriesRef.current = null;
-        ma20Ref.current         = null;
-        ma50Ref.current         = null;
-        ma200Ref.current        = null;
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartType, showMA20, showMA50, showMA200]);
-
-  // Update data whenever it loads
-  useEffect(() => {
-    if (!data?.bars || !mainSeriesRef.current || !volumeSeriesRef.current) return;
-
-    const bars = data.bars;
-    const volumes = bars.map((b: any) => ({
+    // Volume overlay (bottom 18%)
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat:  { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    volumeSeries.setData(bars.map((b: any) => ({
       time:  Math.floor(new Date(b.timestamp).getTime() / 1000),
       value: b.volume,
       color: b.close >= b.open ? "rgba(52,211,153,0.35)" : "rgba(248,113,113,0.35)",
-    }));
+    })));
 
+    // Main price series
+    let mainSeries: any;
     if (chartType === "candle") {
-      mainSeriesRef.current.setData(bars.map((b: any) => ({
+      mainSeries = chart.addSeries(CandlestickSeries, {
+        upColor:         "#34d399",
+        downColor:       "#f87171",
+        borderUpColor:   "#34d399",
+        borderDownColor: "#f87171",
+        wickUpColor:     "#34d399",
+        wickDownColor:   "#f87171",
+      });
+      mainSeries.setData(bars.map((b: any) => ({
         time:  Math.floor(new Date(b.timestamp).getTime() / 1000),
-        open:  b.open,
-        high:  b.high,
-        low:   b.low,
-        close: b.close,
+        open: b.open, high: b.high, low: b.low, close: b.close,
       })));
     } else {
-      mainSeriesRef.current.setData(bars.map((b: any) => ({
+      mainSeries = chart.addSeries(LineSeries, {
+        color:            "#22d3ee",
+        lineWidth:        2,
+        priceLineVisible: false,
+      });
+      mainSeries.setData(bars.map((b: any) => ({
         time:  Math.floor(new Date(b.timestamp).getTime() / 1000),
         value: b.close,
       })));
     }
 
-    volumeSeriesRef.current.setData(volumes);
+    // Moving averages
+    const addMA = (n: number, color: string) => {
+      const d = calcSMA(bars, n);
+      if (!d.length) return;
+      const s = chart.addSeries(LineSeries, {
+        color,
+        lineWidth:              1,
+        priceLineVisible:       false,
+        lastValueVisible:       false,
+        crosshairMarkerVisible: false,
+      });
+      s.setData(d as any);
+    };
+    if (showMA20)  addMA(20,  "#fbbf24");
+    if (showMA50)  addMA(50,  "#a78bfa");
+    if (showMA200) addMA(200, "#f87171");
 
-    if (ma20Ref.current)  ma20Ref.current.setData(calcSMA(bars, 20));
-    if (ma50Ref.current)  ma50Ref.current.setData(calcSMA(bars, 50));
-    if (ma200Ref.current) ma200Ref.current.setData(calcSMA(bars, 200));
+    // OHLC hover tooltip
+    chart.subscribeCrosshairMove((param: any) => {
+      if (!param.time) { setHovered(null); return; }
+      setHovered(param.seriesData.get(mainSeries) ?? null);
+    });
 
-    chartInst.current?.timeScale().fitContent();
-  }, [data, chartType]);
+    // Responsive resize
+    const ro = new ResizeObserver(() => {
+      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
+    });
+    ro.observe(chartRef.current);
+
+    chart.timeScale().fitContent();
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+    };
+  }, [data, chartType, showMA20, showMA50, showMA200]);
 
   const last = data?.bars?.[data.bars.length - 1];
   const display = hovered ?? (last ? { open: last.open, high: last.high, low: last.low, close: last.close } : null);
@@ -203,7 +161,7 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-      {/* Header bar */}
+      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-zinc-800">
         <div className="flex items-center gap-3">
           <span className="font-bold text-base text-zinc-100">{ticker}</span>
@@ -235,9 +193,9 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
         </div>
       </div>
 
-      {/* Sub-controls: chart type + MAs */}
+      {/* Sub-controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-zinc-800/60">
-        {/* OHLC hover info */}
+        {/* OHLC hover display */}
         <div className="flex gap-2 text-xs font-mono min-w-0">
           {display?.open != null ? (
             <span className={isUp ? "text-emerald-400" : "text-red-400"}>
@@ -251,7 +209,7 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
               {formatPrice(display.value)}
             </span>
           ) : (
-            <span className="text-zinc-600">Hover for OHLC</span>
+            <span className="text-zinc-600 text-xs">Hover for OHLC</span>
           )}
         </div>
 
@@ -274,9 +232,9 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
           {/* MA toggles */}
           <div className="flex gap-1">
             {[
-              { n: "20",  active: showMA20,  cls: "text-amber-400 border-amber-700/50",  toggle: () => setShowMA20((v) => !v) },
+              { n: "20",  active: showMA20,  cls: "text-amber-400 border-amber-700/50",   toggle: () => setShowMA20((v) => !v) },
               { n: "50",  active: showMA50,  cls: "text-violet-400 border-violet-700/50", toggle: () => setShowMA50((v) => !v) },
-              { n: "200", active: showMA200, cls: "text-red-400 border-red-700/50",       toggle: () => setShowMA200((v) => !v) },
+              { n: "200", active: showMA200, cls: "text-red-400 border-red-700/50",        toggle: () => setShowMA200((v) => !v) },
             ].map(({ n, active, cls, toggle }) => (
               <button
                 key={n}
@@ -296,14 +254,14 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
       {/* Chart */}
       <div className="relative" style={{ background: "#0c0c0e" }}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 z-10">
+          <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/70 z-10">
             <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
         <div ref={chartRef} style={{ height: 340 }} />
       </div>
 
-      {/* Legend */}
+      {/* MA legend */}
       {(showMA20 || showMA50 || showMA200) && (
         <div className="flex gap-3 px-4 py-1.5 border-t border-zinc-800/60 text-[10px]">
           {showMA20  && <span className="text-amber-400/80">— SMA 20</span>}
