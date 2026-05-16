@@ -5,7 +5,7 @@ import time
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
 
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=4)
 
 # Module-level caches — keyed screening results survive across requests
 _longterm_cache: Dict = {"ts": 0.0, "data": []}

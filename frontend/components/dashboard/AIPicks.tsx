@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice, colorClass } from "@/lib/utils";
@@ -443,12 +443,26 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
   // Per-panel "show more" — track how many to show per mode
   const [showMore, setShowMore] = useState<Record<string, number>>({ short: 5, long: 5, discovery: 5 });
 
-  // Single fetch for all 3 modes — sequential on backend, no burst
+  // Single fetch for all 3 modes — parallel on backend
   const { data: allData, loading, error, refetch } = useData(
     () => api.aiPicksAll() as Promise<any>,
     [fetchKey],
     { refreshInterval: 0 }
   );
+
+  // Track elapsed loading time to show helpful message on cold start
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (loading) {
+      setLoadingSeconds(0);
+      timerRef.current = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setLoadingSeconds(0);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [loading]);
 
   const handleAnalyzeTicker = async () => {
     const t = tickerInput.trim().toUpperCase();
@@ -565,14 +579,21 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
             </span>
           )}
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
-        >
-          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-          {loading ? "Loading…" : "Refresh"}
-        </button>
+        <div className="flex flex-col items-end gap-0.5">
+          <button
+            onClick={handleRefresh}
+            disabled={loading}
+            className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
+          >
+            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            {loading ? `Analyzing… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}` : "Refresh"}
+          </button>
+          {loading && loadingSeconds >= 10 && (
+            <span className="text-[10px] text-zinc-600 text-right">
+              {loadingSeconds < 60 ? "AI warming up — usually 30–90s" : "Almost there…"}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Top-level error (entire picks-all failed) */}

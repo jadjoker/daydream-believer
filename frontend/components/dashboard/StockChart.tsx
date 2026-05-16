@@ -34,7 +34,7 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
         locale:              "en",
         toolbar_bg:          "#18181b",
         withdateranges:      true,
-        hide_side_toolbar:   false,
+        hide_side_toolbar:   true,
         allow_symbol_change: false,
         enable_publishing:   false,
         studies:             ["Volume@tv-basicstudies"],

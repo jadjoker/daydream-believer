@@ -128,9 +128,9 @@ async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discover
 @router.get("/picks-all")
 async def get_ai_picks_all():
     """
-    Fetch short + long + discovery picks in one request, running them SEQUENTIALLY
-    to avoid a burst of 100+ simultaneous Finnhub calls from All mode loading 3
-    concurrent endpoints at cold start.
+    Fetch short + long + discovery picks in one request.
+    Phase 1: all data fetching runs in parallel (screener + longterm + discovery + market snapshot).
+    Phase 2: all 3 Claude calls run in parallel once their data is ready.
     """
     cache_key_all = "ai_picks_all"
     cached = get_cached(cache_key_all)
@@ -142,42 +142,46 @@ async def get_ai_picks_all():
         date_str = now.strftime("%Y-%m-%d %H:%M ET")
         next_trading_day_label, next_trading_day_date = _next_trading_day(now)
 
-        # Market snapshot once — shared across all 3 modes
-        market_data = await _build_market_snapshot()
-
-        # Short mode: needs screener
-        screener_data = await run_screener(min_rel_volume=1.0, sort_by="score", limit=20)
-        short_result = await ai_service.generate_market_picks(
-            market_overview=market_data,
-            screener_results=screener_data,
-            date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode="short",
+        # Phase 1: all data fetching in parallel
+        # Pre-warm the longterm/discovery caches so generate_market_picks hits cache instantly
+        market_data, screener_data, _, _ = await asyncio.gather(
+            _build_market_snapshot(),
+            run_screener(min_rel_volume=1.0, sort_by="score", limit=20),
+            ai_service.screen_longterm_candidates(top_n=10),
+            ai_service.screen_discovery_candidates(top_n=10),
         )
+
+        # Phase 2: all 3 Claude calls in parallel (internal screenings hit cache)
+        short_result, long_result, disc_result = await asyncio.gather(
+            ai_service.generate_market_picks(
+                market_overview=market_data,
+                screener_results=screener_data,
+                date_str=date_str,
+                next_trading_day_label=next_trading_day_label,
+                mode="short",
+            ),
+            ai_service.generate_market_picks(
+                market_overview=market_data,
+                screener_results=[],
+                date_str=date_str,
+                next_trading_day_label=next_trading_day_label,
+                mode="long",
+            ),
+            ai_service.generate_market_picks(
+                market_overview=market_data,
+                screener_results=[],
+                date_str=date_str,
+                next_trading_day_label=next_trading_day_label,
+                mode="discovery",
+            ),
+        )
+
         short_result["next_trading_day_label"] = next_trading_day_label
         short_result["next_trading_day_date"] = next_trading_day_date
         short_result["mode"] = "short"
-
-        # Long mode
-        long_result = await ai_service.generate_market_picks(
-            market_overview=market_data,
-            screener_results=[],
-            date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode="long",
-        )
         long_result["next_trading_day_label"] = "Long-term (6–12 months)"
         long_result["next_trading_day_date"] = None
         long_result["mode"] = "long"
-
-        # Discovery mode
-        disc_result = await ai_service.generate_market_picks(
-            market_overview=market_data,
-            screener_results=[],
-            date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode="discovery",
-        )
         disc_result["next_trading_day_label"] = "10-Year Discovery Plays"
         disc_result["next_trading_day_date"] = None
         disc_result["mode"] = "discovery"
