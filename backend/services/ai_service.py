@@ -443,7 +443,14 @@ def _call_claude(prompt: str, max_tokens: int = 1800) -> str:
 
 
 def _parse_response(raw: str) -> Dict:
+    import re
     text = raw.strip()
+    # Direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Strip markdown code fences
     if "```" in text:
         for part in text.split("```"):
             part = part.strip().lstrip("json").strip()
@@ -451,7 +458,14 @@ def _parse_response(raw: str) -> Dict:
                 return json.loads(part)
             except Exception:
                 continue
-    return json.loads(text)
+    # Regex: find largest {...} block (handles leading explanation text)
+    matches = re.findall(r'\{[\s\S]*\}', text)
+    for m in sorted(matches, key=len, reverse=True):
+        try:
+            return json.loads(m)
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError("No valid JSON found", text, 0)
 
 
 async def generate_market_picks(
@@ -483,7 +497,9 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, _call_claude, prompt)
+    # Long/discovery prompts need more tokens: 8 picks × thesis text easily exceeds 1800
+    tokens = 2800 if mode in ("long", "discovery") else 1800
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
 
     try:
         result = _parse_response(raw)

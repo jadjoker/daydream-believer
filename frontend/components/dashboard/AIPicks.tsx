@@ -437,6 +437,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
   const [tickerAnalysis, setTickerAnalysis] = useState<any>(null);
   const [tickerLoading, setTickerLoading] = useState(false);
   const [tickerError, setTickerError] = useState<string | null>(null);
+  const [analysisOpen, setAnalysisOpen] = useState(true);
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
   // Per-panel "show more" — track how many to show per mode
   const [showMore, setShowMore] = useState<Record<string, number>>({ short: 5, long: 5, discovery: 5 });
@@ -459,6 +460,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
       const result = await api.analyzeTickerAll(t) as any;
       if (result?.error) throw new Error(result.error);
       setTickerAnalysis(result);
+      setAnalysisOpen(true);
       // Load the ticker in the simulator too
       onTickerSelect(t);
     } catch (e) {
@@ -480,12 +482,11 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
         <div className="flex items-center gap-2 mb-3">
           <Search size={14} className="text-zinc-400" />
           <span className="text-sm font-semibold text-zinc-200">Analyze Any Stock</span>
-          <span className="text-xs text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">AI · All 3 Horizons</span>
         </div>
         <div className="flex gap-2">
           <input
             type="text"
-            placeholder="Ticker symbol — get Short, Long & Discovery analysis at once"
+            placeholder="Enter a ticker to get Short, Long & Discovery analysis"
             value={tickerInput}
             onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
@@ -497,7 +498,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
             disabled={tickerLoading || !tickerInput.trim()}
             className="px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors disabled:opacity-40 whitespace-nowrap"
           >
-            {tickerLoading ? "Analyzing…" : "Analyze All"}
+            {tickerLoading ? "Analyzing…" : "Analyze"}
           </button>
         </div>
         {tickerError && (
@@ -512,24 +513,42 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
           </div>
         )}
         {tickerAnalysis && !tickerLoading && (
-          <div className="mt-3 space-y-3">
-            {ALL_MODE_CONFIGS.map((cfg) => {
-              const a = tickerAnalysis[cfg.mode];
-              if (!a) return null;
-              return (
-                <div key={cfg.mode}>
-                  <div className={`text-[10px] font-semibold uppercase tracking-wider mb-1 ${cfg.accentCls}`}>
-                    {cfg.label} Analysis
-                  </div>
-                  <TickerAnalysisCard
-                    analysis={a}
-                    mode={cfg.mode}
-                    onSelect={() => onTickerSelect(a.ticker)}
-                    onSimulate={onSimulate ? () => onSimulate(a.ticker) : undefined}
-                  />
-                </div>
-              );
-            })}
+          <div className="mt-3">
+            {/* Collapse toggle bar */}
+            <button
+              onClick={() => setAnalysisOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded-lg border border-zinc-700/50 hover:border-zinc-600 transition-colors mb-2"
+            >
+              <span className="text-xs font-semibold text-zinc-300">
+                {tickerAnalysis.ticker} — 3 Horizon Analysis
+              </span>
+              <span className="text-xs text-zinc-500 flex items-center gap-1">
+                {analysisOpen ? "Collapse" : "Expand"}
+                {analysisOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </span>
+            </button>
+
+            {analysisOpen && (
+              <div className="space-y-3">
+                {ALL_MODE_CONFIGS.map((cfg) => {
+                  const a = tickerAnalysis[cfg.mode];
+                  if (!a) return null;
+                  return (
+                    <div key={cfg.mode}>
+                      <div className={`text-[10px] font-semibold uppercase tracking-wider mb-1 ${cfg.accentCls}`}>
+                        {cfg.label} Analysis
+                      </div>
+                      <TickerAnalysisCard
+                        analysis={a}
+                        mode={cfg.mode}
+                        onSelect={() => onTickerSelect(a.ticker)}
+                        onSimulate={onSimulate ? () => onSimulate(a.ticker) : undefined}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
