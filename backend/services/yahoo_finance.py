@@ -4,9 +4,11 @@ import numpy as np
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 
-_executor = ThreadPoolExecutor(max_workers=8)
+# Keep the thread pool small — Yahoo Finance rate-limits aggressively on cloud IPs
+_executor = ThreadPoolExecutor(max_workers=3)
 
 
 def _run_sync(fn, *args, **kwargs):
@@ -14,11 +16,25 @@ def _run_sync(fn, *args, **kwargs):
     return loop.run_in_executor(_executor, lambda: fn(*args, **kwargs))
 
 
+def _get_info_with_retry(ticker_obj, retries: int = 2) -> dict:
+    """Fetch .info with simple retry on 429 rate-limit responses."""
+    for attempt in range(retries + 1):
+        try:
+            info = ticker_obj.info
+            return info or {}
+        except Exception as e:
+            if "429" in str(e) and attempt < retries:
+                time.sleep(2 ** attempt)  # 1s, 2s backoff
+            else:
+                raise
+    return {}
+
+
 async def get_quote(ticker: str) -> Optional[Dict]:
     def _fetch():
         try:
             t = yf.Ticker(ticker)
-            info = t.info
+            info = _get_info_with_retry(t)
             if not info or info.get("regularMarketPrice") is None:
                 # fallback: use fast_info
                 fi = t.fast_info
@@ -254,7 +270,7 @@ async def get_fundamentals(ticker: str) -> Optional[Dict]:
     def _fetch():
         try:
             t = yf.Ticker(ticker)
-            info = t.info
+            info = _get_info_with_retry(t)
             return {
                 "ticker": ticker.upper(),
                 "pe_ratio": info.get("trailingPE"),

@@ -21,6 +21,21 @@ def _get_client():
     return anthropic.Anthropic(api_key=api_key)
 
 
+# ─── Rate-limited gather ─────────────────────────────────────────────────────
+
+async def _batch_gather(coros, batch_size: int = 5, delay: float = 0.8):
+    """Run coroutines in small batches with a delay to avoid Yahoo Finance 429s."""
+    results = []
+    coro_list = list(coros)
+    for i in range(0, len(coro_list), batch_size):
+        batch = coro_list[i:i + batch_size]
+        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+        results.extend(batch_results)
+        if i + batch_size < len(coro_list):
+            await asyncio.sleep(delay)
+    return results
+
+
 # ─── Market regime ───────────────────────────────────────────────────────────
 
 def assess_market_regime(market_overview: Dict) -> Dict:
@@ -566,10 +581,8 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
     """
     from services import yahoo_finance as yf_svc
 
-    quote_results, fund_results = await asyncio.gather(
-        asyncio.gather(*[yf_svc.get_quote(t) for t in LONGTERM_UNIVERSE], return_exceptions=True),
-        asyncio.gather(*[yf_svc.get_fundamentals(t) for t in LONGTERM_UNIVERSE], return_exceptions=True),
-    )
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in LONGTERM_UNIVERSE], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([yf_svc.get_fundamentals(t) for t in LONGTERM_UNIVERSE], batch_size=5, delay=0.8)
 
     candidates = []
     for ticker, quote, fund in zip(LONGTERM_UNIVERSE, quote_results, fund_results):
@@ -1035,10 +1048,8 @@ async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
     """Fetch live fundamentals for the discovery universe and return top scored candidates."""
     from services import yahoo_finance as yf_svc
 
-    quote_results, fund_results = await asyncio.gather(
-        asyncio.gather(*[yf_svc.get_quote(t) for t in DISCOVERY_UNIVERSE], return_exceptions=True),
-        asyncio.gather(*[yf_svc.get_fundamentals(t) for t in DISCOVERY_UNIVERSE], return_exceptions=True),
-    )
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in DISCOVERY_UNIVERSE], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([yf_svc.get_fundamentals(t) for t in DISCOVERY_UNIVERSE], batch_size=5, delay=0.8)
 
     candidates = []
     for ticker, quote, fund in zip(DISCOVERY_UNIVERSE, quote_results, fund_results):
