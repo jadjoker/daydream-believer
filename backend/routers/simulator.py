@@ -42,6 +42,8 @@ def sell(req: TradeRequest):
 
 @router.post("/add-funds")
 def add_funds(req: FundsRequest):
+    if req.amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
     return simulator_service.add_funds(req.amount)
 
 

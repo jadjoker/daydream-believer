@@ -32,8 +32,21 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
   );
 
   const currentPrice = quote?.price ?? 0;
+
+  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
+  const positionTickers = Object.keys(state?.positions ?? {}).sort().join(",");
+  useEffect(() => {
+    const tickers = Object.keys(state?.positions ?? {});
+    if (tickers.length === 0) { setPriceMap({}); return; }
+    api.multiQuote(tickers).then((data: any) => {
+      const map: Record<string, number> = {};
+      (data.quotes ?? []).forEach((q: any) => { if (q.price) map[q.ticker] = q.price; });
+      setPriceMap(map);
+    }).catch(() => {});
+  }, [positionTickers]);
+
   const positionsValue = Object.entries(state.positions).reduce(
-    (sum, [, pos]) => sum + pos.shares * currentPrice,
+    (sum, [sym, pos]) => sum + pos.shares * (priceMap[sym] ?? pos.avgCost),
     0
   );
   const totalValue = state.cash + positionsValue;
@@ -113,7 +126,7 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
         <TradeView ticker={ticker} quote={quote} currentPrice={currentPrice} state={state} buy={buy} sell={sell} />
       )}
       {view === "portfolio" && (
-        <PortfolioView positions={state.positions} currentPrice={currentPrice} ticker={ticker} />
+        <PortfolioView positions={state.positions} currentPrice={currentPrice} ticker={ticker} priceMap={priceMap} />
       )}
       {view === "history" && (
         <HistoryView trades={state.trades} />
@@ -171,6 +184,7 @@ function TradeView({
   const [maxRiskDollars, setMaxRiskDollars] = useState("");
   const [thesis, setThesis] = useState("");
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const sharesNum = parseFloat(shares) || 0;
   const stopNum = parseFloat(stopLoss) || 0;
@@ -197,33 +211,38 @@ function TradeView({
   }, [maxRiskDollars, stopNum, currentPrice, maxBuy]);
 
   const handleSubmit = useCallback(async () => {
+    if (isSubmitting) return;
     setFeedback(null);
     if (!sharesNum || sharesNum <= 0) {
       setFeedback({ ok: false, msg: "Enter a valid number of shares." });
       return;
     }
+    setIsSubmitting(true);
     const name = quote?.name || ticker;
     const fullThesis = [
       thesis,
       stopNum ? `SL: ${formatPrice(stopNum)}` : "",
       tpNum ? `TP: ${formatPrice(tpNum)}` : "",
     ].filter(Boolean).join(" | ");
+    try {
+      const result = action === "buy"
+        ? await buy(ticker, name, sharesNum, currentPrice, fullThesis)
+        : await sell(ticker, name, sharesNum, currentPrice, fullThesis);
 
-    const result = action === "buy"
-      ? await buy(ticker, name, sharesNum, currentPrice, fullThesis)
-      : await sell(ticker, name, sharesNum, currentPrice, fullThesis);
-
-    setFeedback({
-      ok: result.ok,
-      msg: result.ok
-        ? `${action === "buy" ? "Bought" : "Sold"} ${sharesNum} shares of ${ticker.toUpperCase()} @ ${formatPrice(currentPrice)}`
-        : result.error ?? "Error",
-    });
-    if (result.ok) {
-      setShares("");
-      setThesis("");
+      setFeedback({
+        ok: result.ok,
+        msg: result.ok
+          ? `${action === "buy" ? "Bought" : "Sold"} ${sharesNum} shares of ${ticker.toUpperCase()} @ ${formatPrice(currentPrice)}`
+          : result.error ?? "Error",
+      });
+      if (result.ok) {
+        setShares("");
+        setThesis("");
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [action, sharesNum, currentPrice, ticker, thesis, stopNum, tpNum, buy, sell, quote]);
+  }, [action, sharesNum, currentPrice, ticker, thesis, stopNum, tpNum, buy, sell, quote, isSubmitting]);
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -428,15 +447,15 @@ function TradeView({
 
           {/* Submit */}
           <button
-            onClick={() => { handleSubmit(); }}
-            disabled={!sharesNum || sharesNum <= 0 || !currentPrice}
+            onClick={handleSubmit}
+            disabled={isSubmitting || !sharesNum || sharesNum <= 0 || !currentPrice}
             className={`w-full py-2.5 rounded-xl font-semibold text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               action === "buy"
                 ? "bg-emerald-600 hover:bg-emerald-500 text-white"
                 : "bg-red-600 hover:bg-red-500 text-white"
             }`}
           >
-            {action === "buy" ? "Buy" : "Sell"} {sharesNum > 0 ? `${sharesNum} shares` : ""} of {ticker.toUpperCase()}
+            {isSubmitting ? "Processing…" : `${action === "buy" ? "Buy" : "Sell"} ${sharesNum > 0 ? `${sharesNum} shares` : ""} of ${ticker.toUpperCase()}`}
           </button>
         </div>
       </Card>
@@ -481,7 +500,7 @@ function TradeView({
 
 // ─── Portfolio View ───────────────────────────────────────────────────────────
 
-function PortfolioView({ positions, currentPrice, ticker }: { positions: any; currentPrice: number; ticker: string }) {
+function PortfolioView({ positions, currentPrice, ticker, priceMap }: { positions: any; currentPrice: number; ticker: string; priceMap: Record<string, number> }) {
   const entries = Object.entries(positions) as [string, any][];
 
   if (entries.length === 0) {
@@ -512,7 +531,7 @@ function PortfolioView({ positions, currentPrice, ticker }: { positions: any; cu
           </thead>
           <tbody>
             {entries.map(([sym, pos]) => {
-              const price = sym === ticker.toUpperCase() ? currentPrice : 0;
+              const price = priceMap[sym] ?? (sym === ticker.toUpperCase() ? currentPrice : 0);
               const mktVal = pos.shares * (price || pos.avgCost);
               const pnl = mktVal - pos.shares * pos.avgCost;
               const pct = ((price || pos.avgCost) - pos.avgCost) / pos.avgCost * 100;
@@ -803,7 +822,7 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
       if (!price) { setFeedback({ ok: false, msg: `Could not fetch price for ${plan.ticker}` }); return; }
       const res = await api.recurringExecute(plan.id, price, plan.name || plan.ticker) as any;
       if (res.ok !== false) {
-        setFeedback({ ok: true, msg: `Bought ${res.shares_bought?.toFixed(4)} shares of ${plan.ticker} @ ${formatPrice(res.price)}` });
+        setFeedback({ ok: true, msg: `Bought ${res.shares_bought != null ? res.shares_bought.toFixed(4) : "N/A"} shares of ${plan.ticker} @ ${formatPrice(res.price)}` });
         await loadPlans();
         onStateChange();
       } else {

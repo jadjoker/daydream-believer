@@ -26,7 +26,7 @@ async def get_ticker_news(ticker: str):
     seen = set()
     deduped = []
     for a in combined:
-        key = a["title"][:60]
+        key = a.get("title", "")[:60]
         if key not in seen:
             seen.add(key)
             deduped.append(a)

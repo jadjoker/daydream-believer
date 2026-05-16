@@ -86,10 +86,11 @@ def get_state() -> Dict:
 
 def buy(ticker: str, name: str, shares: float, price: float, thesis: str) -> Dict:
     state = _read()
-    total = round(shares * price, 4)
-
     if shares <= 0:
         return {"ok": False, "error": "Shares must be > 0"}
+    if price <= 0:
+        return {"ok": False, "error": "Price must be > 0"}
+    total = round(shares * price, 4)
     if total > state["cash"]:
         return {"ok": False, "error": f"Insufficient funds. Need ${total:.2f}, have ${state['cash']:.2f}"}
 
@@ -126,6 +127,8 @@ def sell(ticker: str, name: str, shares: float, price: float, thesis: str) -> Di
 
     if shares <= 0:
         return {"ok": False, "error": "Shares must be > 0"}
+    if price <= 0:
+        return {"ok": False, "error": "Price must be > 0"}
     if not pos or pos["shares"] < shares:
         have = pos["shares"] if pos else 0
         return {"ok": False, "error": f"Not enough shares. Have {have}, selling {shares}"}

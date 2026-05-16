@@ -124,7 +124,10 @@ def analyze(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional[
 
         def safe(series):
             v = series.iloc[-1] if len(series) > 0 else None
-            return round(float(v), 4) if v is not None and not np.isnan(v) else None
+            if v is None:
+                return None
+            fv = float(v)
+            return round(fv, 4) if not (np.isnan(fv) or np.isinf(fv)) else None
 
         rsi_val = safe(rsi)
         macd_val = safe(macd_line)
