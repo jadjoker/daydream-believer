@@ -69,6 +69,7 @@ export const api = {
   // AI
   aiPicks: (mode: "short" | "long" | "discovery" = "short") => apiFetch(`/ai/picks?mode=${mode}`),
   aiPicksAll: () => apiFetch("/ai/picks-all"),
+  aiPicksMore: (mode: string) => apiFetch(`/ai/picks-more/${mode}`),
   analyzeTicker: (ticker: string, mode: "short" | "long" | "discovery" = "short") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string) =>

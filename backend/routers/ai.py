@@ -129,11 +129,16 @@ async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discover
 async def get_ai_picks_all():
     """
     Fetch short + long + discovery picks in one request.
-    Phase 1: all data fetching runs in parallel (screener + longterm + discovery + market snapshot).
-    Phase 2: all 3 Claude calls run in parallel once their data is ready.
+    Returns 5 picks per mode initially. Full 8-pick set cached for /picks-more/{mode}.
+
+    Phases (staggered to avoid Finnhub burst):
+      1. Market snapshot (cached 5 min)
+      2a. Short screener (35 Finnhub quotes, ~2s)
+      2b. Longterm + discovery cache pre-warm in parallel (~15s each, internally batched)
+      3. 3 Claude calls in parallel (~25s)
     """
-    cache_key_all = "ai_picks_all"
-    cached = get_cached(cache_key_all)
+    cache_key_trimmed = "ai_picks_all"
+    cached = get_cached(cache_key_trimmed)
     if cached is not None:
         return cached
 
@@ -142,16 +147,19 @@ async def get_ai_picks_all():
         date_str = now.strftime("%Y-%m-%d %H:%M ET")
         next_trading_day_label, next_trading_day_date = _next_trading_day(now)
 
-        # Phase 1: all data fetching in parallel
-        # Pre-warm the longterm/discovery caches so generate_market_picks hits cache instantly
-        market_data, screener_data, _, _ = await asyncio.gather(
-            _build_market_snapshot(),
-            run_screener(min_rel_volume=1.0, sort_by="score", limit=20),
+        # Phase 1: market snapshot (cached 5 min, only 4 Finnhub calls)
+        market_data = await _build_market_snapshot()
+
+        # Phase 2a: short screener — 35 concurrent Finnhub quotes, done before longterm starts
+        screener_data = await run_screener(sort_by="score", limit=20)
+
+        # Phase 2b: pre-warm longterm + discovery caches in parallel (internally rate-limited)
+        await asyncio.gather(
             ai_service.screen_longterm_candidates(top_n=10),
             ai_service.screen_discovery_candidates(top_n=10),
         )
 
-        # Phase 2: all 3 Claude calls in parallel (internal screenings hit cache)
+        # Phase 3: all 3 Claude calls in parallel (internal screenings hit module-level cache)
         short_result, long_result, disc_result = await asyncio.gather(
             ai_service.generate_market_picks(
                 market_overview=market_data,
@@ -186,9 +194,24 @@ async def get_ai_picks_all():
         disc_result["next_trading_day_date"] = None
         disc_result["mode"] = "discovery"
 
-        result = {"short": short_result, "long": long_result, "discovery": disc_result}
-        set_cached(cache_key_all, result, ttl=1800)
-        return result
+        full = {"short": short_result, "long": long_result, "discovery": disc_result}
+
+        # Cache the full 8-pick set for /picks-more/{mode}
+        set_cached("ai_picks_all_full", full, ttl=1800)
+
+        # Return only first 5 picks per mode in the initial response
+        trimmed = {}
+        for mode_key, mode_result in full.items():
+            all_picks = mode_result.get("picks", [])
+            trimmed[mode_key] = {
+                **mode_result,
+                "picks": all_picks[:5],
+                "has_more": len(all_picks) > 5,
+                "total_picks": len(all_picks),
+            }
+
+        set_cached(cache_key_trimmed, trimmed, ttl=1800)
+        return trimmed
 
     except ValueError as e:
         raise HTTPException(503, str(e))
@@ -197,6 +220,26 @@ async def get_ai_picks_all():
         if "credit balance is too low" in msg or "billing" in msg.lower():
             raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
         raise HTTPException(500, f"AI picks failed: {e}")
+
+
+@router.get("/picks-more/{mode}")
+async def get_ai_picks_more(mode: str):
+    """
+    Returns picks 6+ for a mode from the cached full result.
+    Must call /picks-all first to populate the cache.
+    Instant response — no Claude call needed.
+    """
+    if mode not in ("short", "long", "discovery"):
+        raise HTTPException(400, "mode must be short, long, or discovery")
+    full = get_cached("ai_picks_all_full")
+    if not full or mode not in full:
+        raise HTTPException(404, "No cached picks for this mode — load /ai/picks-all first")
+    all_picks = full[mode].get("picks", [])
+    return {
+        "mode": mode,
+        "picks": all_picks[5:],
+        "total": len(all_picks),
+    }
 
 
 @router.get("/analyze-all/{ticker}")

@@ -215,31 +215,22 @@ async def preprocess_candidates(
     top_n: int = 6,
 ) -> List[Dict]:
     """
-    Fetch full technicals for top screener candidates, compute ATR-based
-    levels, enhanced scores, and trade types — so Haiku gets pre-digested data.
+    Enrich screener candidates with ATR-based levels and enhanced scores.
+    Uses only data already present in screener results — no yfinance calls.
     """
-    from services.technical_analysis import get_technical_signals
-
-    # First pass: score with screener data only, take top_n * 2 for TA fetch
+    # First pass: score with screener data only
     candidates = sorted(screener_results, key=lambda x: x.get("score", 0), reverse=True)[:max(top_n * 2, 16)]
 
-    # Reuse TA stored by the screener (avoids double Yahoo Finance fetch).
-    # Fall back to a fresh fetch only for candidates where _ta is absent.
+    # Use TA stored by the screener — no fallback fetch (avoids Yahoo Finance rate-limit failures)
     ta_results: List = [r.get("_ta") for r in candidates]
-    missing = [i for i, ta in enumerate(ta_results) if ta is None]
-    if missing:
-        fresh = await asyncio.gather(
-            *[get_technical_signals(candidates[i]["ticker"], period="3mo", interval="1d") for i in missing],
-            return_exceptions=True,
-        )
-        for idx, ta in zip(missing, fresh):
-            ta_results[idx] = ta if isinstance(ta, dict) else None
 
     enriched = []
     for result, ta in zip(candidates, ta_results):
         ta_data = ta if isinstance(ta, dict) else None
         atr = ta_data.get("atr_14") if ta_data else None
         price = result.get("price") or (ta_data.get("price") if ta_data else 0)
+        if not price:
+            continue
         levels = compute_atr_levels(price, atr)
         trade_type = detect_trade_type(result, ta_data, regime)
         score = enhanced_score(result, ta_data, regime)
@@ -277,6 +268,18 @@ async def preprocess_candidates(
                     signals.append("Near BB lower")
                 elif bb_pct_pct > 90:
                     signals.append("Near BB upper")
+        else:
+            # No TA available — fall back to price-action signals from Finnhub quote
+            chg = result.get("change_pct", 0) or 0
+            signals.append(f"Day change: {chg:+.1f}%")
+            if chg > 3:
+                signals.append("Strong bullish momentum")
+            elif chg > 1:
+                signals.append("Mild bullish")
+            elif chg < -3:
+                signals.append("Strong selling pressure")
+            elif chg < -1:
+                signals.append("Mild bearish")
 
         enriched.append({
             "ticker": result["ticker"],
@@ -291,7 +294,7 @@ async def preprocess_candidates(
             "enhanced_score": score,
             "trade_type": trade_type,
             "ta_signals": signals[:6],
-            "ta_summary": (ta_data or {}).get("signal_summary", ""),
+            "ta_summary": (ta_data or {}).get("signal_summary", "Price-action based — TA unavailable"),
             "suggested_stop": levels["stop_loss"],
             "suggested_target": levels["target_2r"],
             "entry_low": levels["entry_low"],

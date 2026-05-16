@@ -440,8 +440,9 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [analysisOpen, setAnalysisOpen] = useState(true);
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
-  // Per-panel "show more" — track how many to show per mode
-  const [showMore, setShowMore] = useState<Record<string, number>>({ short: 5, long: 5, discovery: 5 });
+  // Extra picks loaded on demand per mode
+  const [extraPicks, setExtraPicks] = useState<Record<string, any[]>>({});
+  const [loadingMore, setLoadingMore] = useState<Record<string, boolean>>({});
 
   // Single fetch for all 3 modes — parallel on backend
   const { data: allData, loading, error, refetch } = useData(
@@ -487,7 +488,21 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
 
   const handleRefresh = () => {
     setFetchKey((k) => k + 1);
+    setExtraPicks({});
     refetch();
+  };
+
+  const handleLoadMore = async (mode: string) => {
+    if (loadingMore[mode]) return;
+    setLoadingMore((s) => ({ ...s, [mode]: true }));
+    try {
+      const result = await api.aiPicksMore(mode) as any;
+      setExtraPicks((s) => ({ ...s, [mode]: result.picks ?? [] }));
+    } catch {
+      // silently ignore — user can retry
+    } finally {
+      setLoadingMore((s) => ({ ...s, [mode]: false }));
+    }
   };
 
   return (
@@ -603,10 +618,11 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
       {ALL_MODE_CONFIGS.map((cfg) => {
         const modeData = allData?.[cfg.mode];
         const modeLoading = loading;
-        const picks: any[] = modeData?.picks ?? [];
-        const visibleCount = showMore[cfg.mode] ?? 5;
-        const visiblePicks = picks.slice(0, visibleCount);
-        const hasMore = picks.length > visibleCount;
+        const initialPicks: any[] = modeData?.picks ?? [];
+        const extra: any[] = extraPicks[cfg.mode] ?? [];
+        const picks = [...initialPicks, ...extra];
+        const hasMore = (modeData?.has_more ?? false) && extra.length === 0;
+        const visiblePicks = picks;
 
         return (
           <div key={cfg.mode} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
@@ -700,21 +716,18 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                       );
                     })}
 
-                    {/* Load more / show less */}
+                    {/* Load more — fetches picks 6+ from backend cache */}
                     {hasMore && (
                       <button
-                        onClick={() => setShowMore((s) => ({ ...s, [cfg.mode]: visibleCount + 5 }))}
-                        className="w-full text-xs text-zinc-500 hover:text-zinc-300 py-1.5 border border-zinc-800 rounded-lg transition-colors"
+                        onClick={() => handleLoadMore(cfg.mode)}
+                        disabled={loadingMore[cfg.mode]}
+                        className="w-full text-xs text-zinc-500 hover:text-zinc-300 py-1.5 border border-zinc-800 rounded-lg transition-colors disabled:opacity-40"
                       >
-                        Show {Math.min(5, picks.length - visibleCount)} more picks ↓
-                      </button>
-                    )}
-                    {visibleCount > 5 && (
-                      <button
-                        onClick={() => setShowMore((s) => ({ ...s, [cfg.mode]: 5 }))}
-                        className="w-full text-xs text-zinc-600 hover:text-zinc-400 py-1 transition-colors"
-                      >
-                        Show less ↑
+                        {loadingMore[cfg.mode] ? (
+                          <span className="flex items-center justify-center gap-1.5">
+                            <RefreshCw size={10} className="animate-spin" /> Loading more picks…
+                          </span>
+                        ) : "Show more picks ↓"}
                       </button>
                     )}
                   </div>
