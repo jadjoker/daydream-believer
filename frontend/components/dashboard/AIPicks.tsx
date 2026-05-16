@@ -639,9 +639,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                               >
                                 {pick.ticker}
                               </button>
-                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border shrink-0 ${TRADE_TYPE_COLORS[pick.trade_type] ?? "bg-zinc-800 text-zinc-400 border-zinc-700"}`}>
-                                {pick.trade_type?.replace("_", " ")}
-                              </span>
                               <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
@@ -658,7 +655,11 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                                 </button>
                               )}
                               <button
-                                onClick={() => setExpandedPick(isExpanded ? null : key)}
+                                onClick={() => {
+                                  const next = isExpanded ? null : key;
+                                  setExpandedPick(next);
+                                  if (!isExpanded) onTickerSelect(pick.ticker);
+                                }}
                                 className="flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
                               >
                                 Detail {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}

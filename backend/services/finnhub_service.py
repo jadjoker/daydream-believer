@@ -55,6 +55,39 @@ async def get_quote(ticker: str) -> Optional[Dict]:
     }
 
 
+_PERIOD_MAP = {
+    # (period_str, interval_str) → (finnhub_resolution, days_back)
+    ("1d",  "5m"):   ("5",  2),
+    ("5d",  "15m"):  ("15", 6),
+    ("1mo", "1d"):   ("D",  32),
+    ("3mo", "1d"):   ("D",  95),
+    ("6mo", "1d"):   ("D",  185),
+    ("1y",  "1d"):   ("D",  370),
+    ("2y",  "1wk"):  ("W",  740),
+    ("5y",  "1wk"):  ("W",  1830),
+}
+
+async def get_candles(ticker: str, period: str = "3mo", interval: str = "1d") -> List[Dict]:
+    """OHLCV candles from Finnhub. Returns same shape as yahoo_finance.get_ohlcv."""
+    resolution, days = _PERIOD_MAP.get((period, interval), ("D", 95))
+    now = int(datetime.utcnow().timestamp())
+    frm = int((datetime.utcnow() - timedelta(days=days)).timestamp())
+    data = await _get("/stock/candle", {"symbol": ticker, "resolution": resolution, "from": frm, "to": now})
+    if not data or data.get("s") != "ok":
+        return []
+    bars = []
+    for i, t in enumerate(data["t"]):
+        bars.append({
+            "timestamp": datetime.utcfromtimestamp(t).isoformat(),
+            "open":   round(data["o"][i], 4),
+            "high":   round(data["h"][i], 4),
+            "low":    round(data["l"][i], 4),
+            "close":  round(data["c"][i], 4),
+            "volume": float(data["v"][i]),
+        })
+    return bars
+
+
 async def get_company_news(ticker: str, days_back: int = 7) -> List[Dict]:
     end = datetime.now().strftime("%Y-%m-%d")
     start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")

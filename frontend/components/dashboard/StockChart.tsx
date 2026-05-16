@@ -47,7 +47,7 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
   const [showMA200, setShowMA200]           = useState(false);
   const [hovered, setHovered]               = useState<any>(null);
 
-  const { data, loading } = useData(
+  const { data, loading, error } = useData(
     () => api.ohlcv(ticker, selectedPeriod.period, selectedPeriod.interval) as Promise<any>,
     [ticker, selectedPeriod.period],
     { refreshInterval: 60000 },
@@ -270,7 +270,12 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
             <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
-        <div ref={chartRef} style={{ height: 340 }} />
+        {error && !loading && (
+          <div className="flex items-center justify-center text-sm text-red-400 py-4" style={{ height: 340 }}>
+            Failed to load chart data: {error}
+          </div>
+        )}
+        <div ref={chartRef} style={{ height: error && !loading ? 0 : 340 }} />
       </div>
 
       {/* MA legend */}
