@@ -1,4 +1,6 @@
 import os
+import asyncio
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,10 +9,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import stocks, sentiment, options, news, screener, insider, earnings, market, ai, simulator
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: pre-warm AI picks in the background if cache is cold.
+    # This way picks are ready (or nearly ready) by the time the first user arrives
+    # after a deploy — instead of the first user triggering the full 40-50s generation.
+    from services.cache_service import get_cached
+    if get_cached("ai_picks_all") is None:
+        asyncio.create_task(ai.background_refresh_picks())
+    yield
+    # Shutdown: nothing to clean up
+
+
 app = FastAPI(
     title="Daydream Believer — Day Trader Assistant API",
     description="Aggregates market data, technical analysis, sentiment, options flow, news, and insider activity.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")

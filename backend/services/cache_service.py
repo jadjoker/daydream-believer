@@ -17,6 +17,10 @@ def set_cached(key: str, value: Any, ttl: int = _DEFAULT_TTL):
     _cache.set(key, value, expire=ttl)
 
 
+def delete_cached(key: str):
+    _cache.delete(key)
+
+
 def cache(ttl: int = _DEFAULT_TTL, key_prefix: str = ""):
     def decorator(func):
         @functools.wraps(func)

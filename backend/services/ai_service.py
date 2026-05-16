@@ -780,22 +780,25 @@ async def analyze_ticker(
     # ─── short-term path below ────
     from services.technical_analysis import get_technical_signals
     from services import yahoo_finance as yf_svc
+    from services import finnhub_service
 
     regime = assess_market_regime(market_overview)
 
-    quote, ta = await asyncio.gather(
+    quote_yf, ta, quote_fh = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="3mo", interval="1d"),
+        finnhub_service.get_quote(ticker),
         return_exceptions=True,
     )
 
-    quote_data = quote if isinstance(quote, dict) else {}
+    quote_data = quote_yf if isinstance(quote_yf, dict) else {}
     ta_data = ta if isinstance(ta, dict) else {}
+    fh_data = quote_fh if isinstance(quote_fh, dict) else {}
 
-    price = quote_data.get("price") or ta_data.get("price") or 0
-    name = quote_data.get("name", ticker)
-    change_pct = quote_data.get("change_pct", 0) or 0
-    sector = quote_data.get("sector", "")
+    price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
+    name = quote_data.get("name") or fh_data.get("name") or ticker
+    change_pct = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
+    sector = quote_data.get("sector") or fh_data.get("sector") or ""
 
     if not price:
         return {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
@@ -826,10 +829,22 @@ async def analyze_ticker(
         if bb_pct is not None:
             if bb_pct * 100 < 10: signals.append("Near BB lower band")
             elif bb_pct * 100 > 90: signals.append("Near BB upper band")
+    else:
+        # Fallback: price-action signals from Finnhub quote (Yahoo Finance TA blocked on cloud)
+        signals.append(f"Day change: {change_pct:+.1f}%")
+        high = fh_data.get("high") or 0
+        low_price = fh_data.get("low") or 0
+        if high and low_price and price and high != low_price:
+            pct_pos = (price - low_price) / (high - low_price) * 100
+            signals.append(f"At {pct_pos:.0f}% of day range (L${low_price:.2f}/H${high:.2f})")
+        if change_pct > 3: signals.append("Strong bullish momentum")
+        elif change_pct > 1: signals.append("Mild bullish momentum")
+        elif change_pct < -3: signals.append("Strong selling pressure")
+        elif change_pct < -1: signals.append("Mild bearish pressure")
 
-    ta_summary = ta_data.get("signal_summary", "")
+    ta_summary = ta_data.get("signal_summary") or (f"Price action: {change_pct:+.1f}% on the day" if change_pct else "Price action analysis")
     rr_est = round((levels["target_2r"] - price) / levels["risk_per_share"], 1) if levels["risk_per_share"] > 0 else 0
-    signals_str = ", ".join(signals) or "Limited technical data"
+    signals_str = ", ".join(signals) if signals else f"Day change: {change_pct:+.1f}%"
 
     is_weekend = "Monday" in next_trading_day_label
     context_note = (
@@ -1235,21 +1250,24 @@ async def analyze_ticker_all_modes(
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    # Fetch all data concurrently
-    quote, ta, fund = await asyncio.gather(
+    # Fetch all data concurrently — Finnhub quote as reliable price backup
+    quote_yf, ta, fund, quote_fh = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1d"),
         finnhub_service.get_fundamentals_mapped(ticker),
+        finnhub_service.get_quote(ticker),
         return_exceptions=True,
     )
 
-    quote_data = quote if isinstance(quote, dict) else {}
+    quote_data = quote_yf if isinstance(quote_yf, dict) else {}
     ta_data = ta if isinstance(ta, dict) else {}
     fund_data = fund if isinstance(fund, dict) else {}
+    fh_data = quote_fh if isinstance(quote_fh, dict) else {}
 
-    price = quote_data.get("price") or ta_data.get("price") or 0
-    name = quote_data.get("name", ticker)
-    sector = quote_data.get("sector", "")
+    price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
+    name = quote_data.get("name") or fh_data.get("name") or ticker
+    change_pct_atm = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
+    sector = quote_data.get("sector") or fh_data.get("sector") or ""
 
     if not price:
         err = {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
@@ -1290,6 +1308,17 @@ async def analyze_ticker_all_modes(
         if adx: signals.append(f"ADX {adx:.0f}")
         if vwap and price: signals.append(f"{'above' if price > vwap else 'below'} VWAP")
         if stoch_k: signals.append(f"Stoch {stoch_k:.0f}")
+    else:
+        # Fallback: price-action signals when TA is unavailable (Yahoo Finance blocked on cloud)
+        signals.append(f"Day change: {change_pct_atm:+.1f}%")
+        h = fh_data.get("high") or 0
+        l = fh_data.get("low") or 0
+        if h and l and price and h != l:
+            signals.append(f"At {(price - l) / (h - l) * 100:.0f}% of day range")
+        if change_pct_atm > 3: signals.append("Strong bullish momentum")
+        elif change_pct_atm > 1: signals.append("Mild bullish")
+        elif change_pct_atm < -3: signals.append("Strong selling pressure")
+        elif change_pct_atm < -1: signals.append("Mild bearish")
 
     def _pct(v, label): return f"{label}: {v*100:.1f}%" if v is not None else None
     fund_lines = [x for x in [
@@ -1308,7 +1337,7 @@ async def analyze_ticker_all_modes(
     prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 3 investment horizons simultaneously.
 
 STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
-TA SIGNALS: {', '.join(signals) or 'limited data'} | Summary: {ta_data.get('signal_summary', '')}
+TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'} | Summary: {ta_data.get('signal_summary') or (f'Price action: {change_pct_atm:+.1f}% today' if change_pct_atm else 'Price action analysis')}
 FUNDAMENTALS: {fund_str}
 MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} — {regime['vix_regime']}
 

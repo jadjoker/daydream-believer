@@ -486,9 +486,10 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
     }
   };
 
-  const handleRefresh = () => {
-    setFetchKey((k) => k + 1);
+  const handleRefresh = async () => {
     setExtraPicks({});
+    try { await api.aiRefresh(); } catch {} // clears server cache before refetch
+    setFetchKey((k) => k + 1);
     refetch();
   };
 

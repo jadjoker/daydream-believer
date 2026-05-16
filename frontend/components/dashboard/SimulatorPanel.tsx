@@ -92,13 +92,13 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
         </div>
       </div>
 
-      {/* View tabs */}
-      <div className="flex gap-1">
+      {/* View tabs — scrollable on mobile to prevent horizontal overflow */}
+      <div className="flex gap-1 overflow-x-auto pb-0.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         {VIEWS.map((v) => (
           <button
             key={v.id}
             onClick={() => setView(v.id)}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 ${
               view === v.id
                 ? "bg-zinc-800 text-zinc-100 border border-zinc-700"
                 : "text-zinc-500 hover:text-zinc-300"

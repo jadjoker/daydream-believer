@@ -70,6 +70,8 @@ export const api = {
   aiPicks: (mode: "short" | "long" | "discovery" = "short") => apiFetch(`/ai/picks?mode=${mode}`),
   aiPicksAll: () => apiFetch("/ai/picks-all"),
   aiPicksMore: (mode: string) => apiFetch(`/ai/picks-more/${mode}`),
+  aiPicksStatus: () => apiFetch("/ai/picks-status"),
+  aiRefresh: () => apiFetch("/ai/refresh", { method: "POST" }),
   analyzeTicker: (ticker: string, mode: "short" | "long" | "discovery" = "short") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string) =>
