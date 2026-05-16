@@ -1,9 +1,5 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import {
-  createChart, ColorType, CrosshairMode,
-  CandlestickSeries, HistogramSeries, LineSeries,
-} from "lightweight-charts";
 import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice, colorClass } from "@/lib/utils";
@@ -40,6 +36,9 @@ interface StockChartProps {
 
 export default function StockChart({ ticker, price, changePct }: StockChartProps) {
   const chartRef = useRef<HTMLDivElement>(null);
+  // Store the loaded lib so both effects share it without a race
+  const libRef   = useRef<any>(null);
+  const [libReady, setLibReady] = useState(false);
 
   const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[3]);
   const [chartType, setChartType]           = useState<"candle" | "line">("candle");
@@ -54,11 +53,25 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
     { refreshInterval: 60000 },
   );
 
-  // Single effect — creates chart, sets data, and cleans up.
-  // Runs whenever data or display settings change.
+  // Load lightweight-charts once (dynamic import avoids SSR crash)
+  useEffect(() => {
+    import("lightweight-charts").then((lib) => {
+      libRef.current = lib;
+      setLibReady(true);
+    });
+  }, []);
+
+  // Create/recreate chart whenever lib is ready, data arrives, or settings change.
+  // libReady in the dep array means this fires after the dynamic import resolves,
+  // even if data was already available — no more race condition.
   useEffect(() => {
     const bars = data?.bars;
-    if (!chartRef.current || !bars?.length) return;
+    if (!libReady || !chartRef.current || !bars?.length) return;
+
+    const {
+      createChart, ColorType, CrosshairMode,
+      CandlestickSeries, HistogramSeries, LineSeries,
+    } = libRef.current;
 
     const chart = createChart(chartRef.current, {
       width:  chartRef.current.clientWidth,
@@ -120,14 +133,13 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
     const addMA = (n: number, color: string) => {
       const d = calcSMA(bars, n);
       if (!d.length) return;
-      const s = chart.addSeries(LineSeries, {
+      chart.addSeries(LineSeries, {
         color,
         lineWidth:              1,
         priceLineVisible:       false,
         lastValueVisible:       false,
         crosshairMarkerVisible: false,
-      });
-      s.setData(d as any);
+      }).setData(d as any);
     };
     if (showMA20)  addMA(20,  "#fbbf24");
     if (showMA50)  addMA(50,  "#a78bfa");
@@ -151,11 +163,11 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
       ro.disconnect();
       chart.remove();
     };
-  }, [data, chartType, showMA20, showMA50, showMA200]);
+  }, [libReady, data, chartType, showMA20, showMA50, showMA200]);
 
-  const last = data?.bars?.[data.bars.length - 1];
+  const last    = data?.bars?.[data.bars.length - 1];
   const display = hovered ?? (last ? { open: last.open, high: last.high, low: last.low, close: last.close } : null);
-  const isUp = display
+  const isUp    = display
     ? ((display.close ?? display.value ?? 0) >= (display.open ?? display.close ?? 0))
     : (changePct ?? 0) >= 0;
 
@@ -232,8 +244,8 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
           {/* MA toggles */}
           <div className="flex gap-1">
             {[
-              { n: "20",  active: showMA20,  cls: "text-amber-400 border-amber-700/50",   toggle: () => setShowMA20((v) => !v) },
-              { n: "50",  active: showMA50,  cls: "text-violet-400 border-violet-700/50", toggle: () => setShowMA50((v) => !v) },
+              { n: "20",  active: showMA20,  cls: "text-amber-400 border-amber-700/50",   toggle: () => setShowMA20((v)  => !v) },
+              { n: "50",  active: showMA50,  cls: "text-violet-400 border-violet-700/50", toggle: () => setShowMA50((v)  => !v) },
               { n: "200", active: showMA200, cls: "text-red-400 border-red-700/50",        toggle: () => setShowMA200((v) => !v) },
             ].map(({ n, active, cls, toggle }) => (
               <button

@@ -23,7 +23,7 @@ type View = "trade" | "portfolio" | "history" | "accuracy" | "chart" | "recurrin
 
 export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
   const { state, loading, buy, sell, addFunds, reset, refetch, stats } = useSimulator();
-  const [view, setView] = useState<View>("trade");
+  const [view, setView] = useState<View>("chart");
 
   const { data: quote } = useData(
     () => ticker ? api.quote(ticker) as Promise<any> : Promise.resolve(null),
