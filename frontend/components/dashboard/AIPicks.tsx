@@ -400,8 +400,17 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
 
 // ─── All mode — three panels, single fetch ───────────────────────────────────
 
+function nextTradingDayLabel(): string {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  if (day === 5) return "Monday's open"; // Friday → next Monday
+  if (day === 6) return "Monday's open"; // Saturday → Monday
+  if (day === 0) return "tomorrow's open"; // Sunday → Monday (tomorrow)
+  return "tomorrow's open";
+}
+
 const ALL_MODE_CONFIGS = [
-  { mode: "short"     as const, label: "Day Trading",  accentCls: "text-cyan-400",   badgeCls: "border-cyan-800/40 text-cyan-400",    desc: "Short-term picks for tomorrow's open" },
+  { mode: "short"     as const, label: "Day Trading",  accentCls: "text-cyan-400",   badgeCls: "border-cyan-800/40 text-cyan-400",    desc: `Short-term picks for ${nextTradingDayLabel()}` },
   { mode: "long"      as const, label: "Long-Term",    accentCls: "text-purple-400", badgeCls: "border-purple-800/40 text-purple-400", desc: "6–12 month conviction plays" },
   { mode: "discovery" as const, label: "Discovery",    accentCls: "text-amber-400",  badgeCls: "border-amber-800/40 text-amber-400",   desc: "10-year disruptors" },
 ];
