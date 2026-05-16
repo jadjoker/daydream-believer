@@ -125,6 +125,98 @@ async def get_ai_picks(mode: str = Query("short", pattern="^(short|long|discover
         raise HTTPException(500, f"AI picks failed: {e}")
 
 
+@router.get("/picks-all")
+async def get_ai_picks_all():
+    """
+    Fetch short + long + discovery picks in one request, running them SEQUENTIALLY
+    to avoid a burst of 100+ simultaneous Finnhub calls from All mode loading 3
+    concurrent endpoints at cold start.
+    """
+    cache_key_all = "ai_picks_all"
+    cached = get_cached(cache_key_all)
+    if cached is not None:
+        return cached
+
+    try:
+        now = datetime.now(pytz.timezone("US/Eastern"))
+        date_str = now.strftime("%Y-%m-%d %H:%M ET")
+        next_trading_day_label, next_trading_day_date = _next_trading_day(now)
+
+        # Market snapshot once — shared across all 3 modes
+        market_data = await _build_market_snapshot()
+
+        # Short mode: needs screener
+        screener_data = await run_screener(min_rel_volume=1.0, sort_by="score", limit=20)
+        short_result = await ai_service.generate_market_picks(
+            market_overview=market_data,
+            screener_results=screener_data,
+            date_str=date_str,
+            next_trading_day_label=next_trading_day_label,
+            mode="short",
+        )
+        short_result["next_trading_day_label"] = next_trading_day_label
+        short_result["next_trading_day_date"] = next_trading_day_date
+        short_result["mode"] = "short"
+
+        # Long mode
+        long_result = await ai_service.generate_market_picks(
+            market_overview=market_data,
+            screener_results=[],
+            date_str=date_str,
+            next_trading_day_label=next_trading_day_label,
+            mode="long",
+        )
+        long_result["next_trading_day_label"] = "Long-term (6–12 months)"
+        long_result["next_trading_day_date"] = None
+        long_result["mode"] = "long"
+
+        # Discovery mode
+        disc_result = await ai_service.generate_market_picks(
+            market_overview=market_data,
+            screener_results=[],
+            date_str=date_str,
+            next_trading_day_label=next_trading_day_label,
+            mode="discovery",
+        )
+        disc_result["next_trading_day_label"] = "10-Year Discovery Plays"
+        disc_result["next_trading_day_date"] = None
+        disc_result["mode"] = "discovery"
+
+        result = {"short": short_result, "long": long_result, "discovery": disc_result}
+        set_cached(cache_key_all, result, ttl=1800)
+        return result
+
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        msg = str(e)
+        if "credit balance is too low" in msg or "billing" in msg.lower():
+            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+        raise HTTPException(500, f"AI picks failed: {e}")
+
+
+@router.get("/analyze-all/{ticker}")
+async def analyze_ticker_all(ticker: str):
+    """Single-prompt analysis across all 3 horizons — 1 Claude call instead of 3."""
+    try:
+        now = datetime.now(pytz.timezone("US/Eastern"))
+        next_trading_day_label, _ = _next_trading_day(now)
+        market_data = await _build_market_snapshot()
+        result = await ai_service.analyze_ticker_all_modes(
+            ticker=ticker.upper().strip(),
+            market_overview=market_data,
+            next_trading_day_label=next_trading_day_label,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        msg = str(e)
+        if "credit balance is too low" in msg or "billing" in msg.lower():
+            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+        raise HTTPException(500, f"Ticker analysis failed: {e}")
+
+
 @router.get("/analyze/{ticker}")
 async def analyze_ticker(ticker: str, mode: str = Query("short", pattern="^(short|long|discovery)$")):
     """Analyze a single ticker on demand. API call fires only when user submits."""

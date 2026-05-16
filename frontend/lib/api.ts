@@ -68,8 +68,11 @@ export const api = {
 
   // AI
   aiPicks: (mode: "short" | "long" | "discovery" = "short") => apiFetch(`/ai/picks?mode=${mode}`),
+  aiPicksAll: () => apiFetch("/ai/picks-all"),
   analyzeTicker: (ticker: string, mode: "short" | "long" | "discovery" = "short") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
+  analyzeTickerAll: (ticker: string) =>
+    apiFetch(`/ai/analyze-all/${encodeURIComponent(ticker)}`),
 
   // Simulator (shared state via backend SQLite)
   simulatorState: () => apiFetch("/simulator/state"),

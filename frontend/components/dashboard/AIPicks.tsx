@@ -15,7 +15,6 @@ import {
 interface AIPicksProps {
   onTickerSelect: (ticker: string) => void;
   onSimulate?: (ticker: string) => void;
-  mode?: "short" | "long" | "discovery" | "all";
 }
 
 const TRADE_TYPE_COLORS: Record<string, string> = {
@@ -49,238 +48,8 @@ const REC_CONFIG: Record<string, { icon: React.ReactNode; cls: string; bg: strin
   avoid: { icon: <XCircle size={14} />,    cls: "text-red-400",      bg: "bg-red-500/10 border-red-500/30",        label: "AVOID" },
 };
 
-export default function AIPicks({ onTickerSelect, onSimulate, mode = "short" }: AIPicksProps) {
-  if (mode === "all") {
-    return <AllModePicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
-  }
-  const [fetchKey, setFetchKey] = useState(0);
-  const [tickerInput, setTickerInput] = useState("");
-  const [tickerAnalysis, setTickerAnalysis] = useState<any>(null);
-  const [tickerLoading, setTickerLoading] = useState(false);
-  const [tickerError, setTickerError] = useState<string | null>(null);
-  const [expandedPick, setExpandedPick] = useState<string | null>(null);
-
-  const { data, loading, error, refetch } = useData(
-    () => api.aiPicks(mode) as Promise<any>,
-    [fetchKey, mode],
-    { refreshInterval: 0 }
-  );
-
-  const handleRefresh = () => {
-    setFetchKey((k) => k + 1);
-    refetch();
-  };
-
-  const handleAnalyzeTicker = async () => {
-    const t = tickerInput.trim().toUpperCase();
-    if (!t) return;
-    setTickerLoading(true);
-    setTickerError(null);
-    setTickerAnalysis(null);
-    try {
-      const result = await api.analyzeTicker(t, mode) as any;
-      if (result?.error) throw new Error(result.error);
-      setTickerAnalysis(result);
-    } catch (e) {
-      setTickerError(e instanceof Error ? e.message : "Analysis failed");
-    } finally {
-      setTickerLoading(false);
-    }
-  };
-
-  const bias = data?.bias ?? "neutral";
-  const biasConf = BIAS_CONFIG[bias as keyof typeof BIAS_CONFIG] ?? BIAS_CONFIG.neutral;
-  const nextDayLabel = data?.next_trading_day_label ?? "Tomorrow";
-  const isLong = mode === "long";
-  const isDiscovery = mode === "discovery";
-  const accentCls = isDiscovery ? "text-amber-400" : isLong ? "text-purple-400" : "text-cyan-400";
-
-  return (
-    <div className="space-y-4">
-      {/* Ticker Analyzer */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Search size={14} className={accentCls} />
-          <span className="text-sm font-semibold text-zinc-200">
-            {isDiscovery ? "Discovery Mode Analysis" : isLong ? "Long-Term Stock Analysis" : "Analyze Any Stock"}
-          </span>
-          <span className="text-xs text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">AI</span>
-          {isLong && (
-            <span className="text-[10px] text-purple-400 border border-purple-800/40 rounded px-1.5 py-0.5">
-              6–12 month hold
-            </span>
-          )}
-          {isDiscovery && (
-            <span className="text-[10px] text-amber-400 border border-amber-800/40 rounded px-1.5 py-0.5">
-              10+ year horizon
-            </span>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Ticker symbol (e.g. NVDA)"
-            value={tickerInput}
-            onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
-            maxLength={10}
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
-          />
-          <button
-            onClick={handleAnalyzeTicker}
-            disabled={tickerLoading || !tickerInput.trim()}
-            className="px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors disabled:opacity-40 whitespace-nowrap"
-          >
-            {tickerLoading ? "Analyzing…" : "Analyze"}
-          </button>
-        </div>
-
-        {tickerError && (
-          <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
-            <AlertTriangle size={11} /> {tickerError}
-          </p>
-        )}
-
-        {tickerAnalysis && !tickerLoading && (
-          <div className="mt-3">
-            <TickerAnalysisCard
-              analysis={tickerAnalysis}
-              mode={mode}
-              onSelect={() => onTickerSelect(tickerAnalysis.ticker)}
-              onSimulate={onSimulate ? () => onSimulate(tickerAnalysis.ticker) : undefined}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Market Brief header */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Sparkles size={16} className={accentCls} />
-            <span className="font-semibold text-zinc-200">
-              {isDiscovery ? "Claude's Discovery Picks" : isLong ? "Claude's Long-Term Outlook" : "Claude's Market Brief"}
-            </span>
-            <span className="text-xs text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">AI</span>
-          </div>
-          <div className="flex items-center gap-3">
-            {data?.generated_at && (
-              <div className="flex items-center gap-1 text-xs text-zinc-600">
-                <Clock size={11} />
-                {data.generated_at}
-              </div>
-            )}
-            <button
-              onClick={handleRefresh}
-              disabled={loading}
-              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
-            >
-              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-              {loading ? "Analyzing…" : "Refresh"}
-            </button>
-          </div>
-        </div>
-
-        {loading && (
-          <div className="space-y-2 animate-pulse">
-            <div className="h-4 bg-zinc-800 rounded w-3/4" />
-            <div className="h-4 bg-zinc-800 rounded w-1/2" />
-          </div>
-        )}
-
-        {error && (() => {
-          const isNoKey = error.includes("ANTHROPIC_API_KEY") || error.includes("503");
-          const isNoCredits = error.includes("coin jar") || error.includes("credits") || error.includes("billing");
-          if (isNoCredits) {
-            return (
-              <div className="rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 space-y-1.5">
-                <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
-                  <span className="text-base">🪙</span> Out of AI Credits
-                </div>
-                <p className="text-sm text-amber-200/80 leading-relaxed">{error}</p>
-                <a
-                  href="https://console.anthropic.com/settings/billing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-amber-400 underline underline-offset-2 hover:text-amber-300 transition-colors"
-                >
-                  console.anthropic.com/settings/billing ↗
-                </a>
-              </div>
-            );
-          }
-          return (
-            <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2.5">
-              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-              <span>
-                {isNoKey
-                  ? "Add ANTHROPIC_API_KEY to backend/.env to enable AI picks."
-                  : `API error: ${error}`}
-              </span>
-            </div>
-          );
-        })()}
-
-        {data && !loading && (
-          <div className="space-y-3">
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className={`flex items-center gap-1 text-xs font-medium ${biasConf.cls}`}>
-                  {biasConf.icon} {biasConf.label}
-                </span>
-              </div>
-              <p className="text-sm text-zinc-300 leading-relaxed">{data.market_summary}</p>
-            </div>
-            <p className="text-[10px] text-zinc-600 italic">
-              AI-generated analysis for simulation purposes only. Not financial advice. Always verify independently.
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Picks */}
-      {data?.picks?.length > 0 && !loading && (
-        <div className="space-y-3">
-          <div className="text-xs text-zinc-500 uppercase tracking-wider px-1">
-            {isDiscovery ? "10-Year Discovery Plays" : isLong ? "12-Month Conviction Plays" : `Top Picks for ${nextDayLabel}'s Open`}
-          </div>
-          {data.picks.map((pick: any) => (
-            <PickCard
-              key={pick.ticker}
-              pick={pick}
-              mode={mode}
-              onSelect={() => onTickerSelect(pick.ticker)}
-              onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
-              expanded={expandedPick === pick.ticker}
-              onToggle={() => setExpandedPick(expandedPick === pick.ticker ? null : pick.ticker)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Avoid section */}
-      {data?.avoid?.length > 0 && !loading && (
-        <div className="bg-zinc-900 border border-red-900/30 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <ShieldAlert size={14} className="text-red-400" />
-            <span className="text-xs font-semibold text-red-400 uppercase tracking-wider">
-              {isDiscovery ? "Weak Discovery Thesis" : isLong ? "Avoid Long-Term" : `Avoid ${nextDayLabel}`}
-            </span>
-          </div>
-          <div className="flex gap-2 flex-wrap mb-2">
-            {data.avoid.map((t: string) => (
-              <span key={t} className="text-xs font-bold bg-red-500/10 border border-red-500/20 text-red-400 px-2 py-0.5 rounded">
-                {t}
-              </span>
-            ))}
-          </div>
-          {data.avoid_reason && (
-            <p className="text-xs text-zinc-500 italic">{data.avoid_reason}</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
+export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
+  return <AllModePicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
 }
 
 // ─── Ticker analysis result card ──────────────────────────────────────────────
@@ -627,33 +396,55 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
   );
 }
 
-// ─── All mode — three panels stacked ─────────────────────────────────────────
+// ─── All mode — three panels, single fetch ───────────────────────────────────
 
-const ALL_MODE_CONFIGS: { mode: "short" | "long" | "discovery"; label: string; accentCls: string; badgeCls: string; desc: string }[] = [
-  { mode: "short",     label: "Day Trading",  accentCls: "text-cyan-400",   badgeCls: "border-cyan-800/40 text-cyan-400",   desc: "Short-term picks for tomorrow's open" },
-  { mode: "long",      label: "Long-Term",    accentCls: "text-purple-400", badgeCls: "border-purple-800/40 text-purple-400", desc: "6–12 month conviction plays" },
-  { mode: "discovery", label: "Discovery",   accentCls: "text-amber-400",  badgeCls: "border-amber-800/40 text-amber-400",  desc: "10-year disruptors" },
+const ALL_MODE_CONFIGS = [
+  { mode: "short"     as const, label: "Day Trading",  accentCls: "text-cyan-400",   badgeCls: "border-cyan-800/40 text-cyan-400",    desc: "Short-term picks for tomorrow's open" },
+  { mode: "long"      as const, label: "Long-Term",    accentCls: "text-purple-400", badgeCls: "border-purple-800/40 text-purple-400", desc: "6–12 month conviction plays" },
+  { mode: "discovery" as const, label: "Discovery",    accentCls: "text-amber-400",  badgeCls: "border-amber-800/40 text-amber-400",   desc: "10-year disruptors" },
 ];
+
+function renderError(error: string) {
+  const isNoCredits = error.includes("coin jar") || error.includes("credits") || error.includes("billing");
+  return (
+    <div className="px-4 py-3">
+      {isNoCredits ? (
+        <div className="rounded-lg border border-amber-700/40 bg-amber-950/20 px-3 py-2 space-y-1">
+          <p className="text-xs text-amber-300 font-semibold">🪙 Out of AI Credits</p>
+          <p className="text-xs text-amber-200/70">{error}</p>
+          <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer"
+            className="text-xs text-amber-400 underline underline-offset-2 hover:text-amber-300">
+            console.anthropic.com/settings/billing ↗
+          </a>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          {error.includes("ANTHROPIC_API_KEY") || error.includes("503")
+            ? "Add ANTHROPIC_API_KEY to enable AI picks."
+            : `Error: ${error}`}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
   const [fetchKey, setFetchKey] = useState(0);
   const [tickerInput, setTickerInput] = useState("");
-  const [tickerMode, setTickerMode] = useState<"short" | "long" | "discovery">("short");
   const [tickerAnalysis, setTickerAnalysis] = useState<any>(null);
   const [tickerLoading, setTickerLoading] = useState(false);
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
+  // Per-panel "show more" — track how many to show per mode
+  const [showMore, setShowMore] = useState<Record<string, number>>({ short: 5, long: 5, discovery: 5 });
 
-  const shortData  = useData(() => api.aiPicks("short")     as Promise<any>, [fetchKey], { refreshInterval: 0 });
-  const longData   = useData(() => api.aiPicks("long")      as Promise<any>, [fetchKey], { refreshInterval: 0 });
-  const discData   = useData(() => api.aiPicks("discovery") as Promise<any>, [fetchKey], { refreshInterval: 0 });
-
-  const dataSets = [
-    { cfg: ALL_MODE_CONFIGS[0], ...shortData },
-    { cfg: ALL_MODE_CONFIGS[1], ...longData },
-    { cfg: ALL_MODE_CONFIGS[2], ...discData },
-  ];
-  const anyLoading = dataSets.some((d) => d.loading);
+  // Single fetch for all 3 modes — sequential on backend, no burst
+  const { data: allData, loading, error, refetch } = useData(
+    () => api.aiPicksAll() as Promise<any>,
+    [fetchKey],
+    { refreshInterval: 0 }
+  );
 
   const handleAnalyzeTicker = async () => {
     const t = tickerInput.trim().toUpperCase();
@@ -662,9 +453,12 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
     setTickerError(null);
     setTickerAnalysis(null);
     try {
-      const result = await api.analyzeTicker(t, tickerMode) as any;
+      // Single combined Claude call — all 3 horizons at once
+      const result = await api.analyzeTickerAll(t) as any;
       if (result?.error) throw new Error(result.error);
       setTickerAnalysis(result);
+      // Load the ticker in the simulator too
+      onTickerSelect(t);
     } catch (e) {
       setTickerError(e instanceof Error ? e.message : "Analysis failed");
     } finally {
@@ -672,34 +466,24 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
     }
   };
 
+  const handleRefresh = () => {
+    setFetchKey((k) => k + 1);
+    refetch();
+  };
+
   return (
     <div className="space-y-4">
       {/* Ticker Analyzer */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-2 mb-3">
           <Search size={14} className="text-zinc-400" />
           <span className="text-sm font-semibold text-zinc-200">Analyze Any Stock</span>
-          <span className="text-xs text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">AI</span>
-          <div className="ml-auto flex rounded-lg overflow-hidden border border-zinc-700">
-            {ALL_MODE_CONFIGS.map((c) => (
-              <button
-                key={c.mode}
-                onClick={() => setTickerMode(c.mode)}
-                className={`px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                  tickerMode === c.mode
-                    ? c.mode === "short" ? "bg-cyan-600 text-white" : c.mode === "long" ? "bg-purple-600 text-white" : "bg-amber-600 text-white"
-                    : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
+          <span className="text-xs text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">AI · All 3 Horizons</span>
         </div>
         <div className="flex gap-2">
           <input
             type="text"
-            placeholder="Ticker symbol (e.g. NVDA)"
+            placeholder="Ticker symbol — get Short, Long & Discovery analysis at once"
             value={tickerInput}
             onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
@@ -711,7 +495,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
             disabled={tickerLoading || !tickerInput.trim()}
             className="px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors disabled:opacity-40 whitespace-nowrap"
           >
-            {tickerLoading ? "Analyzing…" : "Analyze"}
+            {tickerLoading ? "Analyzing…" : "Analyze All"}
           </button>
         </div>
         {tickerError && (
@@ -719,155 +503,203 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
             <AlertTriangle size={11} /> {tickerError}
           </p>
         )}
+        {tickerLoading && (
+          <div className="mt-3 space-y-1.5 animate-pulse">
+            <div className="h-3 bg-zinc-800 rounded w-3/4" />
+            <div className="h-3 bg-zinc-800 rounded w-1/2" />
+          </div>
+        )}
         {tickerAnalysis && !tickerLoading && (
-          <div className="mt-3">
-            <TickerAnalysisCard
-              analysis={tickerAnalysis}
-              mode={tickerMode}
-              onSelect={() => onTickerSelect(tickerAnalysis.ticker)}
-              onSimulate={onSimulate ? () => onSimulate(tickerAnalysis.ticker) : undefined}
-            />
+          <div className="mt-3 space-y-3">
+            {ALL_MODE_CONFIGS.map((cfg) => {
+              const a = tickerAnalysis[cfg.mode];
+              if (!a) return null;
+              return (
+                <div key={cfg.mode}>
+                  <div className={`text-[10px] font-semibold uppercase tracking-wider mb-1 ${cfg.accentCls}`}>
+                    {cfg.label} Analysis
+                  </div>
+                  <TickerAnalysisCard
+                    analysis={a}
+                    mode={cfg.mode}
+                    onSelect={() => onTickerSelect(a.ticker)}
+                    onSimulate={onSimulate ? () => onSimulate(a.ticker) : undefined}
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Refresh header */}
+      {/* Header */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
-          <span className="text-sm font-semibold text-zinc-200">All Mode — 3 Timeframes</span>
+          <span className="text-sm font-semibold text-zinc-200">AI Picks — 3 Timeframes</span>
+          {allData && !loading && (
+            <span className="text-[10px] text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">
+              {allData.short?.generated_at ?? ""}
+            </span>
+          )}
         </div>
         <button
-          onClick={() => setFetchKey((k) => k + 1)}
-          disabled={anyLoading}
+          onClick={handleRefresh}
+          disabled={loading}
           className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
         >
-          <RefreshCw size={12} className={anyLoading ? "animate-spin" : ""} />
-          {anyLoading ? "Loading…" : "Refresh All"}
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+          {loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
+      {/* Top-level error (entire picks-all failed) */}
+      {error && renderError(error)}
+
       {/* Three mode panels */}
-      {dataSets.map(({ cfg, data, loading, error }) => (
-        <div key={cfg.mode} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-          {/* Panel header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <div className="flex items-center gap-2">
-              <span className={`font-semibold text-sm ${cfg.accentCls}`}>{cfg.label}</span>
-              <span className={`text-[10px] border rounded px-1.5 py-0.5 ${cfg.badgeCls}`}>{cfg.desc}</span>
+      {ALL_MODE_CONFIGS.map((cfg) => {
+        const modeData = allData?.[cfg.mode];
+        const modeLoading = loading;
+        const picks: any[] = modeData?.picks ?? [];
+        const visibleCount = showMore[cfg.mode] ?? 5;
+        const visiblePicks = picks.slice(0, visibleCount);
+        const hasMore = picks.length > visibleCount;
+
+        return (
+          <div key={cfg.mode} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+            {/* Panel header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className={`font-semibold text-sm shrink-0 ${cfg.accentCls}`}>{cfg.label}</span>
+                <span className={`text-[10px] border rounded px-1.5 py-0.5 shrink-0 ${cfg.badgeCls}`}>{cfg.desc}</span>
+              </div>
+              {modeData?.bias && (
+                <span className={`text-xs shrink-0 ${
+                  modeData.bias === "bullish" ? "text-emerald-400" :
+                  modeData.bias === "bearish" ? "text-red-400" : "text-yellow-400"
+                }`}>{modeData.bias}</span>
+              )}
             </div>
-            {data?.bias && (
-              <span className={`text-xs ${
-                data.bias === "bullish" ? "text-emerald-400" :
-                data.bias === "bearish" ? "text-red-400" : "text-yellow-400"
-              }`}>
-                {data.bias}
-              </span>
+
+            {modeLoading && (
+              <div className="px-4 py-3 space-y-2 animate-pulse">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="h-8 bg-zinc-800 rounded" />
+                ))}
+              </div>
             )}
-          </div>
 
-          {loading && (
-            <div className="px-4 py-3 space-y-2 animate-pulse">
-              <div className="h-3 bg-zinc-800 rounded w-3/4" />
-              <div className="h-3 bg-zinc-800 rounded w-1/2" />
-            </div>
-          )}
+            {modeData && !modeLoading && (
+              <div className="px-4 py-3 space-y-3">
+                {modeData.market_summary && (
+                  <p className="text-xs text-zinc-400 leading-relaxed">{modeData.market_summary}</p>
+                )}
 
-          {error && (() => {
-            const isNoCredits = error.includes("coin jar") || error.includes("credits") || error.includes("billing");
-            return (
-              <div className="px-4 py-3">
-                {isNoCredits ? (
-                  <div className="rounded-lg border border-amber-700/40 bg-amber-950/20 px-3 py-2 space-y-1">
-                    <p className="text-xs text-amber-300 font-semibold">🪙 Out of AI Credits</p>
-                    <p className="text-xs text-amber-200/70">{error}</p>
+                {picks.length === 0 && (
+                  <p className="text-xs text-zinc-600 italic">No picks available — screener may be loading or rate-limited. Try refreshing.</p>
+                )}
+
+                {/* Picks list — 5 visible, expandable detail */}
+                {picks.length > 0 && (
+                  <div className="space-y-1.5">
+                    {visiblePicks.map((pick: any) => {
+                      const key = `${cfg.mode}-${pick.ticker}`;
+                      const isExpanded = expandedPick === key;
+                      return (
+                        <div key={key} className="rounded-xl border border-zinc-800 overflow-hidden">
+                          {/* Compact row */}
+                          <div className="flex items-center justify-between bg-zinc-800/60 px-3 py-2 gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-xs text-zinc-600 shrink-0">#{pick.rank}</span>
+                              <button
+                                onClick={() => onTickerSelect(pick.ticker)}
+                                className={`font-bold text-sm shrink-0 ${cfg.accentCls} hover:underline`}
+                              >
+                                {pick.ticker}
+                              </button>
+                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border shrink-0 ${TRADE_TYPE_COLORS[pick.trade_type] ?? "bg-zinc-800 text-zinc-400 border-zinc-700"}`}>
+                                {pick.trade_type?.replace("_", " ")}
+                              </span>
+                              <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={`text-xs font-bold tabular-nums ${
+                                pick.confidence >= 8 ? "text-emerald-400" :
+                                pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
+                              }`}>{pick.confidence}/10</span>
+                              {onSimulate && (
+                                <button
+                                  onClick={() => onSimulate(pick.ticker)}
+                                  className="text-[10px] bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2 py-0.5 rounded transition-colors"
+                                >
+                                  Sim
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setExpandedPick(isExpanded ? null : key)}
+                                className="flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
+                              >
+                                Detail {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                              </button>
+                            </div>
+                          </div>
+                          {/* Expanded detail */}
+                          {isExpanded && (
+                            <PickCard
+                              pick={pick}
+                              mode={cfg.mode}
+                              onSelect={() => onTickerSelect(pick.ticker)}
+                              onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
+                              expanded={false}
+                              onToggle={() => {}}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* Load more / show less */}
+                    {hasMore && (
+                      <button
+                        onClick={() => setShowMore((s) => ({ ...s, [cfg.mode]: visibleCount + 5 }))}
+                        className="w-full text-xs text-zinc-500 hover:text-zinc-300 py-1.5 border border-zinc-800 rounded-lg transition-colors"
+                      >
+                        Show {Math.min(5, picks.length - visibleCount)} more picks ↓
+                      </button>
+                    )}
+                    {visibleCount > 5 && (
+                      <button
+                        onClick={() => setShowMore((s) => ({ ...s, [cfg.mode]: 5 }))}
+                        className="w-full text-xs text-zinc-600 hover:text-zinc-400 py-1 transition-colors"
+                      >
+                        Show less ↑
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
-                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                    {error.includes("ANTHROPIC_API_KEY") || error.includes("503")
-                      ? "Add ANTHROPIC_API_KEY to enable AI picks."
-                      : `Error: ${error}`}
+                )}
+
+                {/* Avoid */}
+                {modeData.avoid?.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap pt-1">
+                    <span className="text-[10px] text-red-500 font-semibold uppercase">Avoid:</span>
+                    {modeData.avoid.map((t: string) => (
+                      <span key={t} className="text-[10px] font-bold bg-red-500/10 border border-red-500/20 text-red-400 px-1.5 py-0.5 rounded">
+                        {t}
+                      </span>
+                    ))}
+                    {modeData.avoid_reason && (
+                      <span className="text-[10px] text-zinc-600 italic">{modeData.avoid_reason}</span>
+                    )}
                   </div>
                 )}
               </div>
-            );
-          })()}
-
-          {data && !loading && (
-            <div className="px-4 py-3 space-y-3">
-              {/* Market summary */}
-              {data.market_summary && (
-                <p className="text-xs text-zinc-400 leading-relaxed">{data.market_summary}</p>
-              )}
-
-              {/* Compact picks grid */}
-              {data.picks?.length > 0 && (
-                <div className="space-y-1.5">
-                  {data.picks.slice(0, 4).map((pick: any) => {
-                    const key = `${cfg.mode}-${pick.ticker}`;
-                    return (
-                      <div
-                        key={key}
-                        className="flex items-center justify-between rounded-lg bg-zinc-800/60 px-3 py-2 gap-2"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs text-zinc-500">#{pick.rank}</span>
-                          <button
-                            onClick={() => onTickerSelect(pick.ticker)}
-                            className={`font-bold text-sm ${cfg.accentCls} hover:underline shrink-0`}
-                          >
-                            {pick.ticker}
-                          </button>
-                          <span className="text-xs text-zinc-500 truncate hidden sm:block">{pick.thesis?.slice(0, 60)}…</span>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className={`text-xs font-bold ${
-                            pick.confidence >= 8 ? "text-emerald-400" :
-                            pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
-                          }`}>{pick.confidence}/10</span>
-                          {onSimulate && (
-                            <button
-                              onClick={() => onSimulate(pick.ticker)}
-                              className="text-[10px] bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2 py-0.5 rounded transition-colors"
-                            >
-                              Sim
-                            </button>
-                          )}
-                          <button
-                            onClick={() => setExpandedPick(expandedPick === key ? null : key)}
-                            className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
-                          >
-                            {expandedPick === key ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Expanded pick detail */}
-              {data.picks?.map((pick: any) => {
-                const key = `${cfg.mode}-${pick.ticker}`;
-                if (expandedPick !== key) return null;
-                return (
-                  <div key={key} className="rounded-xl border border-zinc-700 overflow-hidden">
-                    <PickCard
-                      pick={pick}
-                      mode={cfg.mode}
-                      onSelect={() => onTickerSelect(pick.ticker)}
-                      onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
-                      expanded={false}
-                      onToggle={() => {}}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ))}
+            )}
+          </div>
+        );
+      })}
+      <p className="text-[10px] text-zinc-700 italic px-1">
+        AI-generated for simulation purposes only. Not financial advice. Always verify independently.
+      </p>
     </div>
   );
 }

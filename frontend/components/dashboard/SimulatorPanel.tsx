@@ -704,15 +704,28 @@ function DCAView({ defaultTicker }: { defaultTicker: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const handleRun = async () => {
-    setLoading(true);
     setError(null);
+    // Client-side validation
+    if (!ticker.trim()) { setError("Enter a ticker symbol."); return; }
+    if (!start || !end) { setError("Select start and end dates."); return; }
+    if (start >= end) { setError("Start date must be before end date."); return; }
+    const todayCheck = new Date().toISOString().slice(0, 10);
+    if (end > todayCheck) { setError("End date cannot be in the future — historical data only."); return; }
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const daysDiff = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysDiff < 30) { setError("Date range must be at least 30 days to produce meaningful results."); return; }
+    const initVal = parseFloat(initial) || 0;
+    if (initVal <= 0) { setError("Initial investment must be greater than $0."); return; }
+
+    setLoading(true);
     setResult(null);
     try {
       const res = await api.simulatorDca({
         ticker: ticker.trim().toUpperCase(),
         start,
         end,
-        initial: parseFloat(initial) || 0,
+        initial: initVal,
         recurring: parseFloat(recurring) || 0,
         frequency,
       }) as any;

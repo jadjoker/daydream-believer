@@ -221,7 +221,7 @@ async def preprocess_candidates(
     from services.technical_analysis import get_technical_signals
 
     # First pass: score with screener data only, take top_n * 2 for TA fetch
-    candidates = sorted(screener_results, key=lambda x: x.get("score", 0), reverse=True)[:top_n * 2]
+    candidates = sorted(screener_results, key=lambda x: x.get("score", 0), reverse=True)[:max(top_n * 2, 16)]
 
     # Reuse TA stored by the screener (avoids double Yahoo Finance fetch).
     # Fall back to a fresh fetch only for candidates where _ta is absent.
@@ -347,7 +347,7 @@ def _build_prompt(
     return f"""You are an expert day trader. Today is {date_str}.{weekend_note}
 
 Python analysis has already scored, ranked, and computed ATR-based entry/stop/target levels for the best candidates. Your job is to:
-1. Select the BEST 4 from the list below (you may skip lower-ranked ones if the setup is weak)
+1. Select the BEST 8 from the list below (you may select fewer if the setups are weak — quality over quantity)
 2. Validate or slightly adjust the Python-suggested price levels if needed
 3. Write a specific 2-sentence thesis explaining WHY this ticker works for {next_trading_day_label}'s open based on the signals shown
 4. Assign a realistic confidence score 1-10
@@ -464,19 +464,19 @@ async def generate_market_picks(
     regime = assess_market_regime(market_overview)
 
     if mode == "long":
-        candidates = await screen_longterm_candidates(top_n=8)
+        candidates = await screen_longterm_candidates(top_n=10)
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "avoid": [], "avoid_reason": "", "generated_at": date_str}
         prompt = _build_longterm_prompt(candidates, market_overview, date_str)
     elif mode == "discovery":
-        candidates = await screen_discovery_candidates(top_n=8)
+        candidates = await screen_discovery_candidates(top_n=10)
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "avoid": [], "avoid_reason": "", "generated_at": date_str}
         prompt = _build_discovery_prompt(candidates, date_str)
     else:
-        candidates = await preprocess_candidates(screener_results, regime, top_n=6)
+        candidates = await preprocess_candidates(screener_results, regime, top_n=8)
         if not candidates:
             return {"error": "No candidates found from screener", "picks": [], "market_summary": "Insufficient data.",
                     "bias": regime["overall_bias"], "avoid": [], "avoid_reason": "", "generated_at": date_str}
@@ -685,7 +685,7 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
 {candidates_block}
 
 === YOUR JOB ===
-1. Select the BEST 4 candidates for a 6–12 month hold
+1. Select the BEST 8 candidates for a 6–12 month hold (fewer is fine if quality is low)
 2. Set realistic levels:
    - Entry zone: current price ±3% (accumulate over 1–2 weeks, NOT a one-day trade)
    - Stop loss: major weekly support, 10–20% below entry
@@ -1154,7 +1154,7 @@ For each pick, think about:
 {candidates_block}
 
 === YOUR JOB ===
-1. Select the BEST 4 from the list for a 10+ year speculative conviction hold
+1. Select the BEST 8 from the list for a 10+ year speculative conviction hold (fewer is fine if the thesis is weak)
 2. Adjust price targets if warranted — be bold, 3x–10x is realistic for true disruptors
 3. Write a 2-sentence thesis on WHY this company could dominate its market in a decade — cite specific growth metrics
 4. Confidence 8–10: clear disruption path + proven revenue growth + massive TAM. Below 6 = don't recommend.
@@ -1187,6 +1187,175 @@ Respond ONLY with valid JSON, no markdown:
   "avoid_reason": "Brief reason: weak thesis, declining revenue, or high execution risk.",
   "generated_at": "{date_str}"
 }}"""
+
+
+async def analyze_ticker_all_modes(
+    ticker: str,
+    market_overview: Dict,
+    next_trading_day_label: str = "Tomorrow",
+) -> Dict:
+    """
+    Single-prompt analysis covering all 3 horizons at once — 1 Claude API call
+    instead of 3 sequential calls.  Returns {"short": {...}, "long": {...}, "discovery": {...}}.
+    """
+    from services.technical_analysis import get_technical_signals
+    from services import yahoo_finance as yf_svc
+    from services import finnhub_service
+
+    # Fetch all data concurrently
+    quote, ta, fund = await asyncio.gather(
+        yf_svc.get_quote(ticker),
+        get_technical_signals(ticker, period="1y", interval="1d"),
+        finnhub_service.get_fundamentals_mapped(ticker),
+        return_exceptions=True,
+    )
+
+    quote_data = quote if isinstance(quote, dict) else {}
+    ta_data = ta if isinstance(ta, dict) else {}
+    fund_data = fund if isinstance(fund, dict) else {}
+
+    price = quote_data.get("price") or ta_data.get("price") or 0
+    name = quote_data.get("name", ticker)
+    sector = quote_data.get("sector", "")
+
+    if not price:
+        err = {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
+        return {"short": err, "long": err, "discovery": err}
+
+    regime = assess_market_regime(market_overview)
+
+    # Short-term levels (ATR-based)
+    atr = ta_data.get("atr_14")
+    short_levels = compute_atr_levels(price, atr)
+
+    # Long-term levels (wider)
+    ema50 = ta_data.get("ema_50")
+    long_stop = round(ema50 * 0.97, 2) if ema50 and ema50 < price * 0.92 else round(price * 0.85, 2)
+    long_levels = {
+        "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.03, 2),
+        "stop_loss": long_stop, "target": round(price * 1.25, 2),
+    }
+    long_rr = round((long_levels["target"] - price) / max(price - long_levels["stop_loss"], 0.01), 1)
+
+    # Discovery levels (very wide)
+    disc_levels = {
+        "entry_low": round(price * 0.95, 2), "entry_high": round(price * 1.05, 2),
+        "stop_loss": round(price * 0.65, 2), "target": round(price * 2.50, 2),
+    }
+    disc_rr = round((disc_levels["target"] - price) / max(price - disc_levels["stop_loss"], 0.01), 1)
+
+    # TA signals string
+    signals = []
+    if ta_data:
+        rsi = ta_data.get("rsi_14")
+        macd_hist = ta_data.get("macd_hist")
+        ema9 = ta_data.get("ema_9"); ema21 = ta_data.get("ema_21")
+        adx = ta_data.get("adx"); vwap = ta_data.get("vwap"); stoch_k = ta_data.get("stoch_k")
+        if rsi: signals.append(f"RSI {rsi:.0f}{'(oversold)' if rsi < 30 else '(overbought)' if rsi > 70 else ''}")
+        if macd_hist is not None: signals.append(f"MACD {'▲' if macd_hist > 0 else '▼'}{abs(macd_hist):.3f}")
+        if ema9 and ema21: signals.append(f"EMA9{'>' if ema9 > ema21 else '<'}EMA21")
+        if adx: signals.append(f"ADX {adx:.0f}")
+        if vwap and price: signals.append(f"{'above' if price > vwap else 'below'} VWAP")
+        if stoch_k: signals.append(f"Stoch {stoch_k:.0f}")
+
+    def _pct(v, label): return f"{label}: {v*100:.1f}%" if v is not None else None
+    fund_lines = [x for x in [
+        f"P/E: {fund_data['pe_ratio']:.1f}" if fund_data.get("pe_ratio") else None,
+        _pct(fund_data.get("revenue_growth"), "RevGrowth"),
+        _pct(fund_data.get("gross_margins"), "GrossMargin"),
+        _pct(fund_data.get("profit_margin"), "NetMargin"),
+        _pct(fund_data.get("roe"), "ROE"),
+        f"D/E: {fund_data['debt_to_equity']:.0f}" if fund_data.get("debt_to_equity") is not None else None,
+        f"FCF: ${fund_data['free_cashflow']/1e9:.1f}B" if fund_data.get("free_cashflow") else None,
+    ] if x]
+    fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data limited"
+
+    short_rr = round((short_levels["target_2r"] - price) / short_levels["risk_per_share"], 1) if short_levels["risk_per_share"] > 0 else 0
+
+    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 3 investment horizons simultaneously.
+
+STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
+TA SIGNALS: {', '.join(signals) or 'limited data'} | Summary: {ta_data.get('signal_summary', '')}
+FUNDAMENTALS: {fund_str}
+MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} — {regime['vix_regime']}
+
+━━━ HORIZON 1: DAY TRADING (for {next_trading_day_label}'s open) ━━━
+Entry: ${short_levels['entry_low']:.2f}–${short_levels['entry_high']:.2f} | Stop: ${short_levels['stop_loss']:.2f} | Target: ${short_levels['target_2r']:.2f} | R/R 1:{short_rr}
+Decision criteria: BUY if TA signals align and regime supports it. HOLD if mixed. AVOID if setup is broken.
+
+━━━ HORIZON 2: LONG-TERM (6–12 months) ━━━
+Entry: ${long_levels['entry_low']:.2f}–${long_levels['entry_high']:.2f} | Stop: ${long_levels['stop_loss']:.2f} | Target: ${long_levels['target']:.2f} | R/R 1:{long_rr}
+Decision criteria: BUY if fundamentals are strong and valuation is reasonable. HOLD if good but expensive. AVOID if declining revenue or margins.
+
+━━━ HORIZON 3: 10-YEAR DISCOVERY ━━━
+Entry: ${disc_levels['entry_low']:.2f}–${disc_levels['entry_high']:.2f} | Stop: ${disc_levels['stop_loss']:.2f} | Target: ${disc_levels['target']:.2f} (2.5x) | R/R 1:{disc_rr}
+Decision criteria: BUY if this company could dominate its market in 10 years. HOLD if interesting but unclear. AVOID if no defensible moat or declining growth.
+
+For each horizon write a 2-sentence thesis citing specific data (TA signals for short-term, fundamentals for long/discovery).
+
+Respond ONLY with valid JSON, no markdown:
+{{
+  "short": {{
+    "ticker": "{ticker}", "recommendation": "buy", "trade_type": "momentum",
+    "entry_low": {short_levels['entry_low']}, "entry_high": {short_levels['entry_high']},
+    "stop_loss": {short_levels['stop_loss']}, "target": {short_levels['target_2r']},
+    "risk_reward": "1:{short_rr}", "confidence": 6,
+    "thesis": "2 sentences citing TA signals."
+  }},
+  "long": {{
+    "ticker": "{ticker}", "recommendation": "hold", "trade_type": "growth",
+    "entry_low": {long_levels['entry_low']}, "entry_high": {long_levels['entry_high']},
+    "stop_loss": {long_levels['stop_loss']}, "target": {long_levels['target']},
+    "risk_reward": "1:{long_rr}", "confidence": 6,
+    "thesis": "2 sentences citing fundamental data."
+  }},
+  "discovery": {{
+    "ticker": "{ticker}", "recommendation": "hold", "trade_type": "disruptor",
+    "entry_low": {disc_levels['entry_low']}, "entry_high": {disc_levels['entry_high']},
+    "stop_loss": {disc_levels['stop_loss']}, "target": {disc_levels['target']},
+    "risk_reward": "1:{disc_rr}", "confidence": 6,
+    "thesis": "2 sentences on 10-year disruption potential."
+  }}
+}}"""
+
+    loop = asyncio.get_running_loop()
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=2400))
+
+    try:
+        parsed = _parse_response(raw)
+    except json.JSONDecodeError:
+        fallback = {
+            "ticker": ticker, "recommendation": "hold", "trade_type": "unknown",
+            "entry_low": 0, "entry_high": 0, "stop_loss": 0, "target": 0,
+            "risk_reward": "—", "confidence": 5,
+            "thesis": "Analysis unavailable — AI response could not be parsed.",
+        }
+        return {"short": {**fallback, "trade_type": "momentum"},
+                "long": {**fallback, "trade_type": "growth"},
+                "discovery": {**fallback, "trade_type": "disruptor"}}
+
+    def _fix(result: Dict, levels_entry_low, levels_entry_high, levels_stop, levels_target) -> Dict:
+        el = result.get("entry_low", levels_entry_low)
+        eh = result.get("entry_high", levels_entry_high)
+        stop = result.get("stop_loss", levels_stop)
+        tgt = result.get("target", levels_target)
+        mid = (el + eh) / 2
+        if stop >= mid: stop = levels_stop
+        if tgt <= mid: tgt = levels_target
+        result["stop_loss"] = round(stop, 2)
+        result["target"] = round(tgt, 2)
+        result["theoretical"] = _compute_theoretical(el, eh, stop, tgt, 1000)
+        return result
+
+    short_r  = _fix(parsed.get("short", {}),  short_levels["entry_low"], short_levels["entry_high"],  short_levels["stop_loss"],  short_levels["target_2r"])
+    long_r   = _fix(parsed.get("long", {}),   long_levels["entry_low"],  long_levels["entry_high"],  long_levels["stop_loss"],  long_levels["target"])
+    disc_r   = _fix(parsed.get("discovery", {}), disc_levels["entry_low"], disc_levels["entry_high"], disc_levels["stop_loss"],  disc_levels["target"])
+
+    short_r["next_trading_day"] = next_trading_day_label
+    long_r["next_trading_day"] = "Long-term (6–12 months)"
+    disc_r["next_trading_day"] = "10-Year Horizon"
+
+    return {"ticker": ticker, "short": short_r, "long": long_r, "discovery": disc_r}
 
 
 async def _analyze_ticker_discovery(ticker: str) -> Dict:
