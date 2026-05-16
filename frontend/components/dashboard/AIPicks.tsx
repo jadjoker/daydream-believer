@@ -171,16 +171,13 @@ function PickCard({
   mode = "short",
   onSelect,
   onSimulate,
-  expanded,
-  onToggle,
 }: {
   pick: any;
   mode?: "short" | "long" | "discovery";
   onSelect: () => void;
   onSimulate?: () => void;
-  expanded: boolean;
-  onToggle: () => void;
 }) {
+  const [calcOpen, setCalcOpen] = useState(false);
   const rr = pick.risk_reward || "";
   const tradeTypeClass = TRADE_TYPE_COLORS[pick.trade_type] || "bg-zinc-800 text-zinc-400 border-zinc-700";
   const confidenceColor =
@@ -192,7 +189,7 @@ function PickCard({
   const reward = pick.entry_low && pick.target ? pick.target - pick.entry_low : null;
 
   return (
-    <div className={`bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${expanded ? "border-cyan-800/50" : "border-zinc-800 hover:border-zinc-700"}`}>
+    <div className={`bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${calcOpen ? "border-cyan-800/50" : "border-zinc-800 hover:border-zinc-700"}`}>
       {/* Header row */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/60">
         <div className="flex items-center gap-3">
@@ -213,14 +210,14 @@ function PickCard({
             <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
           </div>
           <button
-            onClick={onToggle}
+            onClick={() => setCalcOpen((o) => !o)}
             className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
-              expanded
+              calcOpen
                 ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400"
                 : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
             }`}
           >
-            $ Returns {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
           {onSimulate && (
             <button
@@ -260,7 +257,7 @@ function PickCard({
       </div>
 
       {/* Investment calculator — expands inline */}
-      {expanded && (
+      {calcOpen && (
         <InvestmentCalculator pick={pick} mode={mode} onSimulate={onSimulate} />
       )}
     </div>
@@ -650,8 +647,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                               mode={cfg.mode}
                               onSelect={() => onTickerSelect(pick.ticker)}
                               onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
-                              expanded={false}
-                              onToggle={() => {}}
                             />
                           )}
                         </div>
