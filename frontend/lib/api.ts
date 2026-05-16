@@ -99,22 +99,4 @@ export const api = {
   recurringDelete: (planId: number) =>
     apiFetch(`/simulator/recurring/${planId}`, { method: "DELETE" }),
 
-  simulatorDca: (params: {
-    ticker: string;
-    start: string;
-    end: string;
-    initial: number;
-    recurring: number;
-    frequency: "weekly" | "biweekly" | "monthly" | "none";
-  }) => {
-    const q = new URLSearchParams({
-      ticker: params.ticker,
-      start: params.start,
-      end: params.end,
-      initial: String(params.initial),
-      recurring: String(params.recurring),
-      frequency: params.frequency,
-    }).toString();
-    return apiFetch(`/simulator/dca?${q}`);
-  },
 };
