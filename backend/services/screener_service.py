@@ -30,32 +30,37 @@ _CACHE_TTL = 7200  # 2 hours
 
 
 async def _run_screener_fresh(universe: List[str]) -> List[Dict]:
-    # Quotes via Finnhub only — zero Yahoo Finance / yfinance dependency
-    quotes = await asyncio.gather(
-        *[finnhub_service.get_quote(t) for t in universe],
-        return_exceptions=True,
-    )
+    # Quotes via Finnhub only — batched to avoid rate-limit burst (max 10 concurrent)
     out = []
-    for ticker, q in zip(universe, quotes):
-        if not isinstance(q, dict) or not q.get("price"):
-            continue
-        chg_pct = q.get("change_pct", 0) or 0
-        score = _compute_score(chg_pct, 1.0, None, None)
-        out.append({
-            "ticker": ticker,
-            "name": q.get("name") or ticker,
-            "price": q.get("price", 0),
-            "change_pct": chg_pct,
-            "volume": q.get("volume", 0),
-            "rel_volume": 1.0,  # Finnhub free tier doesn't provide avg volume
-            "market_cap": q.get("market_cap"),
-            "rsi": None,
-            "short_float": None,
-            "sector": q.get("sector"),
-            "score": score,
-            "signals": [],
-            "_ta": None,
-        })
+    batch_size = 10
+    for i in range(0, len(universe), batch_size):
+        batch = universe[i:i + batch_size]
+        results = await asyncio.gather(
+            *[finnhub_service.get_quote(t) for t in batch],
+            return_exceptions=True,
+        )
+        for ticker, q in zip(batch, results):
+            if not isinstance(q, dict) or not q.get("price"):
+                continue
+            chg_pct = q.get("change_pct", 0) or 0
+            score = _compute_score(chg_pct, 1.0, None, None)
+            out.append({
+                "ticker": ticker,
+                "name": q.get("name") or ticker,
+                "price": q.get("price", 0),
+                "change_pct": chg_pct,
+                "volume": q.get("volume", 0),
+                "rel_volume": 1.0,
+                "market_cap": q.get("market_cap"),
+                "rsi": None,
+                "short_float": None,
+                "sector": q.get("sector"),
+                "score": score,
+                "signals": [],
+                "_ta": None,
+            })
+        if i + batch_size < len(universe):
+            await asyncio.sleep(0.3)  # brief gap between batches
     return out
 
 

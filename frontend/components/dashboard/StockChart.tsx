@@ -30,7 +30,7 @@ export default function StockChart({ ticker, price, changePct }: StockChartProps
         interval:            "D",
         timezone:            "America/New_York",
         theme:               "dark",
-        style:               "1",           // candlestick
+        style:               "2",           // line chart
         locale:              "en",
         toolbar_bg:          "#18181b",
         withdateranges:      true,

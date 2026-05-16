@@ -550,7 +550,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
               className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded-lg border border-zinc-700/50 hover:border-zinc-600 transition-colors mb-2"
             >
               <span className="text-xs font-semibold text-zinc-300">
-                {tickerAnalysis.ticker} — 3 Horizon Analysis
+                {tickerAnalysis.ticker} — Analysis
               </span>
               <span className="text-xs text-zinc-500 flex items-center gap-1">
                 {analysisOpen ? "Collapse" : "Expand"}
