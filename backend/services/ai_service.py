@@ -1468,8 +1468,6 @@ async def analyze_ticker_all_modes(
     ] if x]
     fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data limited"
 
-    short_rr = round((short_levels["target_2r"] - price) / short_levels["risk_per_share"], 1) if short_levels["risk_per_share"] > 0 else 0
-
     # Business model context — guides Claude to give horizon-appropriate recommendations
     model_context = ""
     if model:
