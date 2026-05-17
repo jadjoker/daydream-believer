@@ -671,7 +671,8 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    tokens = 3200 if mode in ("long", "discovery", "unified", "bargain") else 1800
+    # unified asks for 10-14 picks (~200 tokens each) — needs more headroom than bargain
+    tokens = 5000 if mode == "unified" else (3200 if mode in ("long", "discovery", "bargain") else 1800)
 
     for attempt in range(2):
         raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
@@ -1740,7 +1741,7 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
 {candidates_block}
 
 === YOUR JOB ===
-1. Select 10–16 of the best candidates — spread across at least 2 different hold_horizon values
+1. Select 10–14 of the best candidates — spread across at least 2 different hold_horizon values
 2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
 3. Set price levels matching the horizon (see ranges above). Stop must be BELOW entry.
 4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative

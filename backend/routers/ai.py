@@ -218,7 +218,9 @@ async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|bargain|l
         result["next_trading_day_label"] = "Long-Term Picks"
         result["next_trading_day_date"] = None
         result["mode"] = mode
-        set_cached(cache_key, result, ttl=_PICKS_TTL)
+        # Don't lock in empty results for 24h — let retries regenerate
+        effective_ttl = 300 if not result.get("picks") else _PICKS_TTL
+        set_cached(cache_key, result, ttl=effective_ttl)
         return result
     except ValueError as e:
         raise HTTPException(503, str(e))
@@ -311,6 +313,15 @@ async def refresh_ai_picks():
         delete_cached(f"ai_picks_{mode}")
     asyncio.create_task(background_refresh_picks())
     return {"status": "refreshing", "message": "AI picks refresh started in background"}
+
+
+@router.post("/clear-mode/{mode}")
+async def clear_mode_cache(mode: str):
+    """Delete cached picks for a single mode so the next /picks?mode= call regenerates."""
+    if mode not in ("unified", "bargain", "long", "discovery"):
+        raise HTTPException(400, "Invalid mode")
+    delete_cached(f"ai_picks_{mode}")
+    return {"cleared": mode}
 
 
 @router.get("/analyze-all/{ticker}")

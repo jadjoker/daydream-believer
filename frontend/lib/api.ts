@@ -72,6 +72,7 @@ export const api = {
   aiPicksMore: (mode: string) => apiFetch(`/ai/picks-more/${mode}`),
   aiPicksStatus: () => apiFetch("/ai/picks-status"),
   aiRefresh: () => apiFetch("/ai/refresh", { method: "POST" }),
+  aiClearMode: (mode: string) => apiFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
   analyzeTicker: (ticker: string, mode: "unified" | "long" | "discovery" = "unified") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string) =>

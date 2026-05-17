@@ -490,6 +490,8 @@ function PicksPanel({
     if (retrying) return;
     setRetrying(true);
     try {
+      // Clear any stale empty cache for this mode before re-fetching
+      await api.aiClearMode(mode);
       const result = await api.aiPicks(mode) as any;
       if (result?.picks?.length > 0) setOverride(result);
     } catch {}
