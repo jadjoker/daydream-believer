@@ -77,6 +77,7 @@ async def get_quote(ticker: str) -> Optional[Dict]:
                 "ticker": ticker.upper(),
                 "name": info.get("longName") or info.get("shortName") or ticker,
                 "price": price,
+                "prev_close": prev_close,
                 "change": price - prev_close,
                 "change_pct": ((price - prev_close) / prev_close * 100) if prev_close else 0,
                 "volume": volume,

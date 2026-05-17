@@ -24,16 +24,18 @@ _is_generating: bool = False
 
 def _next_trading_day(now: datetime) -> tuple[str, str]:
     wd = now.weekday()
-    if wd == 4:
+    if wd == 4:    # Friday after close → Monday
         delta = 3
-    elif wd == 5:
+    elif wd == 5:  # Saturday → Monday
         delta = 2
-    elif wd == 6:
+    elif wd == 6:  # Sunday → Monday
         delta = 1
     else:
         delta = 1
     next_day = now + timedelta(days=delta)
-    label = ("Monday" if delta > 1 else "Tomorrow") + " " + next_day.strftime("%b %d").replace(" 0", " ")
+    # Use "Monday" for all weekend days (Fri/Sat/Sun) so weekend context fires correctly
+    is_weekend_day = wd >= 4
+    label = ("Monday" if is_weekend_day else "Tomorrow") + " " + next_day.strftime("%b %d").replace(" 0", " ")
     return label, next_day.strftime("%Y-%m-%d")
 
 
@@ -56,7 +58,11 @@ async def _build_market_snapshot() -> dict:
     spy_p, spy_c = pc("SPY")
     qqq_p, qqq_c = pc("QQQ")
     iwm_p, iwm_c = pc("IWM")
-    vix_p, vix_c = pc("^VIX")
+
+    # VIX: prefer live price, fall back to prev_close for weekends/after-hours
+    vix_q = idx.get("^VIX") or {}
+    vix_p = vix_q.get("price") or vix_q.get("prev_close") or 0
+    vix_c = vix_q.get("change_pct") or 0
 
     now_dt = datetime.now(pytz.timezone("US/Eastern"))
     h, m, wd = now_dt.hour, now_dt.minute, now_dt.weekday()

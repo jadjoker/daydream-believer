@@ -76,8 +76,10 @@ def assess_market_regime(market_overview: Dict) -> Dict:
     top_sectors = [s["name"] for s in sorted(sectors, key=lambda x: x.get("change_pct", 0), reverse=True)[:3]]
     bot_sectors = [s["name"] for s in sorted(sectors, key=lambda x: x.get("change_pct", 0))[:2]]
 
+    raw_vix = market_overview.get("vix") or 0
     return {
         "vix": round(vix, 2),
+        "vix_raw": raw_vix,   # 0 means unavailable (market closed, index halted)
         "vix_regime": vix_regime,
         "direction": direction,
         "avg_index_change": round(avg_change, 2),
@@ -85,6 +87,7 @@ def assess_market_regime(market_overview: Dict) -> Dict:
         "top_sectors": top_sectors,
         "weak_sectors": bot_sectors,
         "overall_bias": "bullish" if avg_change > 0.25 else ("bearish" if avg_change < -0.25 else "neutral"),
+        "market_status": market_overview.get("market_status", "open"),
     }
 
 
@@ -418,6 +421,30 @@ async def preprocess_candidates(
     return enriched[:top_n]
 
 
+# ─── Market time context ─────────────────────────────────────────────────────
+
+def _market_time_context(market_overview: Dict, next_trading_day_label: str) -> str:
+    status = market_overview.get("market_status", "open")
+    if status == "open":
+        return ""
+    elif status == "pre-market":
+        return (
+            "\nNote: Markets are currently in PRE-MARKET hours. Regular session opens 9:30am ET. "
+            "Pre-market prices may not hold at open. Do NOT write 'today' as if the regular session is live.\n"
+        )
+    elif status == "after-hours":
+        return (
+            f"\nNote: Markets closed at 4pm ET (AFTER-HOURS now). All prices reflect today's close. "
+            f"Picks are for {next_trading_day_label}'s open. Do NOT reference 'today's trading' or intraday moves — the session is over.\n"
+        )
+    else:  # "closed" — weekend or overnight
+        return (
+            f"\nNote: Markets are CLOSED. All data reflects the most recent session's close. "
+            f"Picks are for {next_trading_day_label}'s open. "
+            f"Do NOT use phrases like 'today' or 'today's trading' — there is no active session.\n"
+        )
+
+
 # ─── Short-term prompt builder ────────────────────────────────────────────────
 
 def _build_prompt(
@@ -427,20 +454,20 @@ def _build_prompt(
     date_str: str,
     next_trading_day_label: str = "Tomorrow",
 ) -> str:
+    vix_label = (
+        f"VIX: {regime['vix']} (last close) — {regime['vix_regime']}"
+        if regime.get("market_status") in ("closed", "pre-market", "after-hours")
+        else f"VIX: {regime['vix']} — {regime['vix_regime']}"
+    )
     regime_block = (
-        f"VIX: {regime['vix']} — {regime['vix_regime']}\n"
+        f"{vix_label}\n"
         f"Market direction: {regime['direction']}\n"
         f"Breadth: {regime['breadth']}\n"
         f"Top sectors: {', '.join(regime['top_sectors'])}\n"
         f"Weak sectors: {', '.join(regime['weak_sectors'])}"
     )
 
-    is_weekend = "Monday" in next_trading_day_label
-    weekend_note = (
-        f"\nNote: Markets are closed this weekend. All data reflects Friday's close. "
-        f"You are preparing picks for {next_trading_day_label}'s open.\n"
-        if is_weekend else ""
-    )
+    time_note = _market_time_context(market_overview, next_trading_day_label)
 
     # Sector concentration warning
     sector_counts = Counter(c.get("sector", "") for c in candidates if c.get("sector"))
@@ -465,7 +492,7 @@ def _build_prompt(
         )
     candidates_block = "\n".join(rows)
 
-    return f"""You are an expert day trader. Today is {date_str}.{weekend_note}
+    return f"""You are an expert day trader. Today is {date_str}.{time_note}
 
 Python analysis has already scored, ranked, and computed ATR-based entry/stop/target levels for the best candidates. Your job:
 1. Select 4–8 of the BEST setups below. If fewer than 4 have clean setups, return fewer — never force weak picks.
@@ -487,6 +514,7 @@ Python analysis has already scored, ranked, and computed ATR-based entry/stop/ta
 - Never recommend a setup that goes against the market regime
 - Stop loss must be BELOW entry for longs
 - market_summary must reference VIX {regime['vix']:.0f} and the specific market direction, and mention {next_trading_day_label}
+- Do NOT write phrases like "today's trading" or "today's session" if the market is closed or after-hours
 
 Respond ONLY with valid JSON, no markdown:
 {{
@@ -611,7 +639,7 @@ async def generate_market_picks(
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "generated_at": date_str}
-        prompt = _build_discovery_prompt(candidates, date_str)
+        prompt = _build_discovery_prompt(candidates, date_str, market_overview)
     else:
         candidates = await preprocess_candidates(screener_results, regime, top_n=8)
         if not candidates:
@@ -802,10 +830,11 @@ def _build_longterm_prompt(
         )
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
-    vix = market_overview.get("vix", 20)
+    vix = market_overview.get("vix") or 20
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
+    time_note = _market_time_context(market_overview, "the next session")
 
-    return f"""You are an expert long-term growth and value investor. Today is {date_str}.
+    return f"""You are an expert long-term growth and value investor. Today is {date_str}.{time_note}
 
 Evaluate these stocks as 6–12 month conviction plays. Focus on business quality, fundamentals, and valuation.
 
@@ -966,16 +995,12 @@ async def analyze_ticker(
         elif change_pct < -3: signals.append("Strong selling pressure")
         elif change_pct < -1: signals.append("Mild bearish pressure")
 
-    ta_summary = ta_data.get("signal_summary") or (f"Price action: {change_pct:+.1f}% on the day" if change_pct else "Price action analysis")
+    ta_summary = ta_data.get("signal_summary") or (f"Price action: {change_pct:+.1f}% (last close)" if change_pct else "Price action analysis")
     rr_est = round((levels["target_2r"] - price) / levels["risk_per_share"], 1) if levels["risk_per_share"] > 0 else 0
     signals_str = ", ".join(signals) if signals else f"Day change: {change_pct:+.1f}%"
 
-    is_weekend = "Monday" in next_trading_day_label
-    context_note = (
-        "Note: Markets are closed this weekend. Data reflects the most recent close."
-        if is_weekend else
-        "Note: Using most recent available price and indicator data."
-    )
+    time_note = _market_time_context(market_overview, next_trading_day_label).strip()
+    context_note = time_note if time_note else "Using most recent available price and indicator data."
 
     prompt = f"""You are an expert day trader. {context_note}
 Analyze {ticker} ({name}) and decide: BUY, HOLD, or AVOID for {next_trading_day_label}'s open.
@@ -1283,7 +1308,7 @@ async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
 
 # ─── Discovery prompt builder ─────────────────────────────────────────────────
 
-def _build_discovery_prompt(candidates: List[Dict], date_str: str) -> str:
+def _build_discovery_prompt(candidates: List[Dict], date_str: str, market_overview: Dict = None) -> str:
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
@@ -1295,8 +1320,9 @@ def _build_discovery_prompt(candidates: List[Dict], date_str: str) -> str:
         )
     candidates_block = "\n".join(rows)
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
+    time_note = _market_time_context(market_overview or {}, "the next session")
 
-    return f"""You are an expert venture-minded long-term investor. Today is {date_str}.
+    return f"""You are an expert venture-minded long-term investor. Today is {date_str}.{time_note}
 
 Your goal: identify companies that could be 10x in 10 years. All candidates have been pre-screened for platform economics potential — these are SaaS, marketplace, fintech, and deep-tech businesses only.
 
@@ -1457,10 +1483,12 @@ BUSINESS MODEL: {model}
 - Long-term: {'focus on ARR/revenue growth rate, gross margins, and platform moat' if model in ('saas','platform') else 'focus on fundamentals appropriate to this business type'}
 - Discovery (10-year): {'this business has genuine platform economics — evaluate network effects, TAM, and growth compounding' if discovery_eligible else f'NOTE: {model} businesses rarely have the platform moat required for 10x in 10 years — be honest about structural limitations'}"""
 
-    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 3 investment horizons simultaneously.
+    time_note = _market_time_context(market_overview, next_trading_day_label)
+    change_label = "last close" if market_overview.get("market_status") in ("closed", "pre-market") else "today"
 
+    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 3 investment horizons simultaneously.{time_note}
 STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
-TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'} | Summary: {ta_data.get('signal_summary') or (f'Price action: {change_pct_atm:+.1f}% today' if change_pct_atm else 'Price action analysis')}
+TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'} | Summary: {ta_data.get('signal_summary') or (f'Price action: {change_pct_atm:+.1f}% ({change_label})' if change_pct_atm else 'Price action analysis')}
 FUNDAMENTALS: {fund_str}
 MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} — {regime['vix_regime']}{model_context}
 
