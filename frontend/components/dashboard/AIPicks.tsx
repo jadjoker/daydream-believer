@@ -463,6 +463,9 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
   // Extra picks loaded on demand per mode
   const [extraPicks, setExtraPicks] = useState<Record<string, any[]>>({});
   const [loadingMore, setLoadingMore] = useState<Record<string, boolean>>({});
+  // Per-mode retry data (overrides allData for that mode when a mode failed)
+  const [modeOverride, setModeOverride] = useState<Record<string, any>>({});
+  const [retrying, setRetrying] = useState<Record<string, boolean>>({});
 
   // Single fetch for all 3 modes — parallel on backend
   const { data: allData, loading, error, refetch } = useData(
@@ -523,6 +526,21 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
       // silently ignore — user can retry
     } finally {
       setLoadingMore((s) => ({ ...s, [mode]: false }));
+    }
+  };
+
+  const handleRetryMode = async (mode: string) => {
+    if (retrying[mode]) return;
+    setRetrying((s) => ({ ...s, [mode]: true }));
+    try {
+      const result = await api.aiPicks(mode as "short" | "long" | "discovery") as any;
+      if (result?.picks?.length > 0) {
+        setModeOverride((s) => ({ ...s, [mode]: result }));
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setRetrying((s) => ({ ...s, [mode]: false }));
     }
   };
 
@@ -648,8 +666,8 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
 
       {/* Three mode panels */}
       {ALL_MODE_CONFIGS.map((cfg) => {
-        const modeData = allData?.[cfg.mode];
-        const modeLoading = loading;
+        const modeData = modeOverride[cfg.mode] ?? allData?.[cfg.mode];
+        const modeLoading = loading || retrying[cfg.mode];
         const initialPicks: any[] = modeData?.picks ?? [];
         const extra: any[] = extraPicks[cfg.mode] ?? [];
         const picks = [...initialPicks, ...extra];
@@ -690,7 +708,17 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                 )}
 
                 {picks.length === 0 && (
-                  <p className="text-xs text-zinc-600 italic">No picks available — screener may be loading or rate-limited. Try refreshing.</p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-zinc-600 italic">Analysis temporarily unavailable.</p>
+                    <button
+                      onClick={() => handleRetryMode(cfg.mode)}
+                      disabled={retrying[cfg.mode]}
+                      className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-cyan-400 border border-zinc-700 hover:border-cyan-700 px-2 py-1 rounded transition-colors disabled:opacity-40"
+                    >
+                      <RefreshCw size={10} className={retrying[cfg.mode] ? "animate-spin" : ""} />
+                      {retrying[cfg.mode] ? "Retrying…" : "Retry"}
+                    </button>
+                  </div>
                 )}
 
                 {/* Picks list — 5 visible, expandable detail */}

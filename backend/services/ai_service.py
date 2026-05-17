@@ -595,13 +595,19 @@ async def generate_market_picks(
     regime = assess_market_regime(market_overview)
 
     if mode == "long":
-        candidates = await screen_longterm_candidates(top_n=10)
+        try:
+            candidates = await screen_longterm_candidates(top_n=10)
+        except Exception:
+            candidates = []
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "generated_at": date_str}
         prompt = _build_longterm_prompt(candidates, market_overview, date_str)
     elif mode == "discovery":
-        candidates = await screen_discovery_candidates(top_n=10)
+        try:
+            candidates = await screen_discovery_candidates(top_n=10)
+        except Exception:
+            candidates = []
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "generated_at": date_str}
@@ -615,21 +621,23 @@ async def generate_market_picks(
 
     loop = asyncio.get_running_loop()
     tokens = 2800 if mode in ("long", "discovery") else 1800
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
 
-    try:
-        result = _parse_response(raw)
-        result["picks"] = _validate_picks(result.get("picks", []), candidates)
-        result["bias"] = result.get("bias") or regime["overall_bias"]
-        result["regime"] = regime
-        return result
-    except json.JSONDecodeError as e:
-        return {
-            "error": f"JSON parse failed: {e}",
-            "picks": [], "market_summary": "Analysis temporarily unavailable.",
-            "bias": regime["overall_bias"],
-            "generated_at": date_str, "regime": regime,
-        }
+    for attempt in range(2):
+        raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
+        try:
+            result = _parse_response(raw)
+            result["picks"] = _validate_picks(result.get("picks", []), candidates)
+            result["bias"] = result.get("bias") or regime["overall_bias"]
+            result["regime"] = regime
+            return result
+        except json.JSONDecodeError:
+            if attempt == 1:
+                return {
+                    "error": "JSON parse failed after retry",
+                    "picks": [], "market_summary": "Analysis temporarily unavailable.",
+                    "bias": regime["overall_bias"],
+                    "generated_at": date_str, "regime": regime,
+                }
 
 
 # ─── Long-term scoring ────────────────────────────────────────────────────────
