@@ -11,6 +11,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 # Module-level caches — keyed screening results survive across requests
 _longterm_cache: Dict = {"ts": 0.0, "data": []}
 _discovery_cache: Dict = {"ts": 0.0, "data": []}
+_bargain_cache: Dict = {"ts": 0.0, "data": []}
 _FUND_CACHE_TTL = 7200  # 2 hours — fundamentals don't change hourly
 
 
@@ -628,13 +629,22 @@ async def generate_market_picks(
 
     if mode == "unified":
         try:
-            candidates = await screen_longterm_candidates(top_n=12)
+            candidates = await screen_longterm_candidates(top_n=16)
         except Exception:
             candidates = []
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "generated_at": date_str}
         prompt = _build_unified_prompt(candidates, market_overview, date_str)
+    elif mode == "bargain":
+        try:
+            candidates = await screen_bargain_candidates(top_n=14)
+        except Exception:
+            candidates = []
+        if not candidates:
+            return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
+                    "bias": "neutral", "generated_at": date_str}
+        prompt = _build_bargain_prompt(candidates, market_overview, date_str)
     elif mode == "long":
         try:
             candidates = await screen_longterm_candidates(top_n=10)
@@ -661,7 +671,7 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    tokens = 3200 if mode in ("long", "discovery", "unified") else 1800
+    tokens = 3200 if mode in ("long", "discovery", "unified", "bargain") else 1800
 
     for attempt in range(2):
         raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
@@ -1394,6 +1404,290 @@ Respond ONLY with valid JSON, no markdown:
 }}"""
 
 
+# ─── Bargain universe ────────────────────────────────────────────────────────
+#
+# Quality businesses that are cheap in absolute price or undervalued on
+# fundamentals — value plays, turnarounds, beaten-down leaders.
+# Distinct from the main growth universe; scoring favors value metrics.
+
+BARGAIN_UNIVERSE: List[tuple] = [
+    # ── Beaten-down fintech / payments ───────────────────────────────────────
+    ("PYPL",  "fintech"),    # PayPal — cheap P/E, large network
+    ("WU",    "fintech"),    # Western Union — ultra cheap, high dividend
+    # ── Value platforms ───────────────────────────────────────────────────────
+    ("PINS",  "platform"),   # Pinterest — cheap P/S, monetization runway
+    ("SNAP",  "platform"),   # Snapchat — cheap, improving margins
+    ("BABA",  "platform"),   # Alibaba — ultra cheap, China risk
+    # ── Cheap semiconductors ──────────────────────────────────────────────────
+    ("MU",    "deeptech"),   # Micron — cyclical, strong long-term
+    ("INTC",  "deeptech"),   # Intel — turnaround, very cheap P/E
+    ("WDC",   "deeptech"),   # Western Digital — cheap storage play
+    # ── Telecom / dividend compounders ───────────────────────────────────────
+    ("T",     "financial"),  # AT&T — cheap, high yield post-delever
+    ("VZ",    "financial"),  # Verizon — cheap, massive dividend
+    # ── Value financials ──────────────────────────────────────────────────────
+    ("WFC",   "financial"),  # Wells Fargo — cheap P/B, improving ROE
+    ("C",     "financial"),  # Citigroup — cheap P/B, restructuring
+    ("MS",    "financial"),  # Morgan Stanley — quality at discount
+    ("USB",   "financial"),  # US Bancorp — consistent, cheap
+    # ── Value consumer ────────────────────────────────────────────────────────
+    ("F",     "consumer"),   # Ford — single-digit P/E, dividend
+    ("GM",    "consumer"),   # General Motors — very cheap P/E
+    ("MO",    "consumer"),   # Altria — ultra high dividend compounder
+    ("KHC",   "consumer"),   # Kraft Heinz — cheap, restructuring
+    # ── Beaten-down healthcare ────────────────────────────────────────────────
+    ("CVS",   "healthcare"), # CVS — cheap, integrating Aetna
+    ("HUM",   "healthcare"), # Humana — beaten down near 52-wk low
+    ("BMY",   "healthcare"), # Bristol-Myers — cheap, LOE concerns priced in
+    ("CI",    "healthcare"), # Cigna — cheap P/E, capital return
+    # ── Value industrials ────────────────────────────────────────────────────
+    ("GE",    "industrial"), # GE Aerospace — turnaround complete
+    ("BA",    "industrial"), # Boeing — deep turnaround
+    ("RTX",   "industrial"), # RTX — defense, cheap vs peers
+    # ── Value energy ──────────────────────────────────────────────────────────
+    ("OXY",   "energy"),     # Occidental — Berkshire backed
+    ("BP",    "energy"),     # BP — cheap vs US energy peers
+    # ── Cheap software / SaaS ─────────────────────────────────────────────────
+    ("PATH",  "saas"),       # UiPath — cheap for automation SaaS
+    ("GTLB",  "saas"),       # GitLab — below SaaS peer multiples
+]
+
+BARGAIN_MODEL: Dict[str, str] = {t: m for t, m in BARGAIN_UNIVERSE}
+
+
+# ─── Bargain scoring ─────────────────────────────────────────────────────────
+
+def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
+    """Score stocks on value metrics. Rewards cheap + quality; penalizes value traps."""
+    score = 0.0
+
+    # P/E — core value metric
+    pe = fund.get("pe_ratio")
+    if pe is not None and pe > 0:
+        if pe < 10:      score += 6
+        elif pe < 15:    score += 4
+        elif pe < 20:    score += 2
+        elif pe < 30:    score += 0.5
+        elif pe > 50:    score -= 2
+
+    # P/S — important where P/E is unavailable (pre-profit)
+    ps = fund.get("ps_ratio")
+    if ps is not None and ps > 0:
+        if ps < 2:       score += 4
+        elif ps < 5:     score += 2
+        elif ps < 10:    score += 0.5
+        elif ps > 20:    score -= 2
+
+    # FCF — clearest sign of real business (not just accounting profit)
+    fcf = fund.get("free_cashflow")
+    if fcf is not None:
+        score += 3 if fcf > 0 else -3
+
+    # Revenue trend — must not be in terminal decline
+    rev = fund.get("revenue_growth")
+    if rev is not None:
+        if rev > 0.15:    score += 2
+        elif rev > 0.05:  score += 1
+        elif rev > -0.05: score += 0   # flat is okay for value
+        elif rev < -0.15: score -= 4   # meaningful decline = value trap risk
+
+    # Profit margin — quality gate
+    margin = fund.get("profit_margin")
+    if margin is not None:
+        if margin > 0.15:   score += 3
+        elif margin > 0.08: score += 2
+        elif margin > 0:    score += 1
+        elif margin < -0.05: score -= 4
+
+    # ROE — capital efficiency
+    roe = fund.get("roe")
+    if roe is not None:
+        if roe > 0.20:   score += 2
+        elif roe > 0.10: score += 1
+        elif roe < 0:    score -= 2
+
+    # Dividend yield — income bonus; value stocks often pay dividends
+    div = fund.get("dividend_yield")
+    if div:
+        if div > 0.05:   score += 3
+        elif div > 0.03: score += 2
+        elif div > 0.01: score += 1
+
+    # Debt to equity — penalize over-levered traps
+    de = fund.get("debt_to_equity")
+    if de is not None:
+        if de < 50:    score += 1
+        elif de > 200: score -= 3
+
+    # Price accessibility bonus — absolute affordability for retail investors
+    if price < 20:    score += 1.5
+    elif price < 50:  score += 1.0
+    elif price < 100: score += 0.5
+
+    # Business model context — consumer/financial/industrial are traditional value sectors
+    if model in ("financial", "consumer", "industrial", "energy"):
+        score += 0.5
+
+    return round(score, 2)
+
+
+async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
+    now = time.time()
+    if _bargain_cache["ts"] and (now - _bargain_cache["ts"]) < _FUND_CACHE_TTL and _bargain_cache["data"]:
+        return _bargain_cache["data"][:top_n]
+
+    from services import yahoo_finance as yf_svc
+    from services import finnhub_service
+
+    tickers = [t for t, _ in BARGAIN_UNIVERSE]
+
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=0.5)
+
+    candidates = []
+    for ticker, quote, fund in zip(tickers, quote_results, fund_results):
+        q = quote if isinstance(quote, dict) else {}
+        f = fund if isinstance(fund, dict) else {}
+        price = q.get("price") or 0
+        if not price:
+            continue
+
+        model = BARGAIN_MODEL.get(ticker, "")
+        score = _score_bargain(f, price, model)
+
+        entry_low  = round(price * 0.97, 2)
+        entry_high = round(price * 1.03, 2)
+        stop_loss  = round(price * 0.82, 2)   # tighter stops for value (less speculative)
+        target     = round(price * 1.40, 2)   # realistic reversion target
+        rr = round((target - price) / max(price - stop_loss, 0.01), 1)
+
+        parts = []
+        if f.get("pe_ratio"):                   parts.append(f"P/E {f['pe_ratio']:.1f}")
+        if f.get("ps_ratio"):                   parts.append(f"P/S {f['ps_ratio']:.1f}")
+        if f.get("revenue_growth") is not None: parts.append(f"RevGrowth {f['revenue_growth']*100:.1f}%")
+        if f.get("profit_margin") is not None:  parts.append(f"Margin {f['profit_margin']*100:.1f}%")
+        if f.get("roe") is not None:            parts.append(f"ROE {f['roe']*100:.1f}%")
+        if f.get("dividend_yield"):             parts.append(f"Div {f['dividend_yield']*100:.1f}%")
+        if f.get("debt_to_equity") is not None: parts.append(f"D/E {f['debt_to_equity']:.0f}")
+        if f.get("free_cashflow"):
+            fcf = f["free_cashflow"]
+            parts.append(f"FCF {'${:.1f}B'.format(fcf/1e9) if abs(fcf) >= 1e9 else '${:.0f}M'.format(fcf/1e6)}")
+
+        candidates.append({
+            "ticker": ticker,
+            "name": q.get("name", ticker),
+            "price": price,
+            "sector": q.get("sector", ""),
+            "business_model": model,
+            "fund_summary": " | ".join(parts) if parts else "Limited data",
+            "entry_low": entry_low,
+            "entry_high": entry_high,
+            "stop_loss": stop_loss,
+            "target": target,
+            "rr": rr,
+            "score": score,
+        })
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    _bargain_cache["ts"] = time.time()
+    _bargain_cache["data"] = candidates
+    return candidates[:top_n]
+
+
+# ─── Bargain prompt builder ───────────────────────────────────────────────────
+
+def _build_bargain_prompt(
+    candidates: List[Dict],
+    market_overview: Dict,
+    date_str: str,
+) -> str:
+    rows = []
+    for i, c in enumerate(candidates, 1):
+        model_label = c.get("business_model", "")
+        rows.append(
+            f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
+            f"   Value metrics: {c['fund_summary']}\n"
+            f"   Suggested: Entry ${c['entry_low']:.2f}–${c['entry_high']:.2f} | Stop ${c['stop_loss']:.2f} | Target ${c['target']:.2f} | R/R 1:{c['rr']}"
+        )
+    candidates_block = "\n".join(rows)
+    spy_c = market_overview.get("spy_change_pct", 0)
+    vix = market_overview.get("vix") or 20
+    ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
+    time_note = _market_time_context(market_overview, "the next session")
+
+    return f"""You are an expert value investor. Today is {date_str}.{time_note}
+
+Your goal: identify quality businesses that are genuinely undervalued — true bargains where the current price does not reflect fundamental worth. These stocks are cheaper in price or valuation than the broader market, but the screen is intelligent: cheap alone is never enough.
+
+A REAL "Bargain Buy" is:
+- A fundamentally sound business with durable economics (positive FCF, real margins, defensible model)
+- Trading at an attractive valuation due to market pessimism, sector rotation, or temporary headwinds
+- Capable of rewarding patient investors through earnings recovery, multiple expansion, or dividend compounding
+
+AVOID these value traps:
+- Revenue in prolonged structural decline with no credible catalyst
+- Dividends funded by debt or unsustainable payout ratios
+- Over-levered balance sheets where a downturn could cause permanent impairment
+- Commodity businesses with no pricing power trading cheap for good reasons
+
+BUSINESS MODEL LENSES (calibrate your thesis):
+- financial: P/B, ROE trajectory, capital return. "1-3yr" or "3-5yr"
+- consumer: brand durability, pricing power, cash generation. "1-3yr" or "3-5yr"
+- industrial: cycle positioning, capex discipline, order backlog. "1-3yr" or "3-5yr"
+- energy: FCF yield, dividend coverage, reserve life. "1-3yr" or "3-5yr"
+- healthcare: pipeline replacement, patent runway, earnings quality. "3-5yr"
+- fintech: payment network durability, margin recovery runway. "3-5yr"
+- platform: user monetization trajectory even at low current multiples. "3-5yr"
+- saas/deeptech: path to profitability, moat at discounted entry. "3-5yr" or "5-10yr"
+
+TICKER IDENTITY — memorize before writing any thesis:
+{ticker_map}
+Every pick's thesis must reference ONLY the company matched to that ticker above.
+
+=== MACRO CONTEXT ===
+SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
+
+=== VALUE CANDIDATES (ranked by fundamentals + valuation score) ===
+{candidates_block}
+
+=== YOUR JOB ===
+1. Select 8–12 of the best candidates — genuine bargains, NOT just anything cheap
+2. Assign hold_horizon: "1-3yr" (near-term catalyst), "3-5yr" (multi-year recovery), "5-10yr" (durable long-term compounder at great price)
+3. Set realistic price targets: value reversion typically 25–80%; do NOT project the same 200–400% as speculative plays
+4. trade_type must be one of: value, dividend, turnaround, compounder, growth
+5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (P/E, yield, margin, revenue growth %). NO vague phrases.
+6. Confidence ≥ 7: clear undervaluation + durable business + credible catalyst. Do not include < 6.
+
+RULES:
+- Stop must be BELOW entry
+- market_summary must reference VIX {vix:.1f} and whether macro conditions favor value accumulation
+- CRITICAL: thesis for ticker X must ONLY describe the company named for X in TICKER IDENTITY above
+
+Respond ONLY with valid JSON, no markdown:
+{{
+  "market_summary": "2 sentences on macro context and whether value stocks look attractive relative to growth now",
+  "bias": "bullish",
+  "picks": [
+    {{
+      "rank": 1,
+      "ticker": "PYPL",
+      "hold_horizon": "3-5yr",
+      "trade_type": "value",
+      "entry_low": 60.00,
+      "entry_high": 65.00,
+      "stop_loss": 50.00,
+      "target": 95.00,
+      "risk_reward": "1:2.4",
+      "confidence": 7,
+      "thesis": "PayPal's trailing P/E of 14x sits at a 5-year low despite a payment volume base exceeding $1.5 trillion annually, with $5B in annual free cash flow funding buybacks at a historic discount. Operating margin recovery from 21% toward a 25%+ target as cost restructuring completes is the primary rerating catalyst.",
+      "catalyst": "Margin recovery announcement or accelerating Venmo monetization in next 2 earnings",
+      "key_risk": "Continued market share loss to Apple Pay, Cash App, and Stripe in checkout flows"
+    }}
+  ],
+  "generated_at": "{date_str}"
+}}"""
+
+
 # ─── Unified prompt builder ──────────────────────────────────────────────────
 
 def _build_unified_prompt(
@@ -1446,7 +1740,7 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
 {candidates_block}
 
 === YOUR JOB ===
-1. Select 7–10 of the best candidates — spread across at least 2 different hold_horizon values
+1. Select 10–16 of the best candidates — spread across at least 2 different hold_horizon values
 2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
 3. Set price levels matching the horizon (see ranges above). Stop must be BELOW entry.
 4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative

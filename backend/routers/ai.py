@@ -103,9 +103,10 @@ async def _inner_generate_all_picks() -> dict:
     # Phase 1: market snapshot (cached 5 min, only 4 calls)
     market_data = await _build_market_snapshot()
 
-    # Phase 2: pre-warm longterm cache (failures are non-fatal)
+    # Phase 2: pre-warm screening caches in parallel (failures are non-fatal)
     await asyncio.gather(
-        ai_service.screen_longterm_candidates(top_n=12),
+        ai_service.screen_longterm_candidates(top_n=16),
+        ai_service.screen_bargain_candidates(top_n=14),
         return_exceptions=True,
     )
 
@@ -115,41 +116,54 @@ async def _inner_generate_all_picks() -> dict:
             "bias": "neutral", "generated_at": date_str,
         }
 
-    # Phase 3: single unified Claude call
-    try:
-        unified_result = await ai_service.generate_market_picks(
+    # Phase 3: unified + bargain Claude calls in parallel
+    p3 = await asyncio.gather(
+        ai_service.generate_market_picks(
             market_overview=market_data,
             screener_results=[],
             date_str=date_str,
             next_trading_day_label=next_trading_day_label,
             mode="unified",
-        )
-    except Exception:
-        unified_result = _error_result()
+        ),
+        ai_service.generate_market_picks(
+            market_overview=market_data,
+            screener_results=[],
+            date_str=date_str,
+            next_trading_day_label=next_trading_day_label,
+            mode="bargain",
+        ),
+        return_exceptions=True,
+    )
 
-    unified_result["next_trading_day_label"] = "Long-Term Picks"
+    unified_result = p3[0] if isinstance(p3[0], dict) else _error_result()
+    bargain_result = p3[1] if isinstance(p3[1], dict) else _error_result()
+
+    unified_result["next_trading_day_label"] = "Pick List"
     unified_result["next_trading_day_date"] = None
     unified_result["mode"] = "unified"
+    bargain_result["next_trading_day_label"] = "Bargain Buys"
+    bargain_result["next_trading_day_date"] = None
+    bargain_result["mode"] = "bargain"
 
-    full = {"unified": unified_result}
+    full = {"unified": unified_result, "bargain": bargain_result}
 
-    # Use short TTL if picks failed — don't lock in errors for 24h
-    any_empty = len(unified_result.get("picks", [])) == 0
+    # Use short TTL if either section failed — don't lock in errors for 24h
+    any_empty = any(len(v.get("picks", [])) == 0 for v in full.values())
     effective_ttl = 300 if any_empty else _PICKS_TTL
 
-    # Cache full pick set for /picks-more/unified
+    # Cache full pick sets for /picks-more/{mode}
     set_cached("ai_picks_all_full", full, ttl=effective_ttl)
 
-    # Return only first 5 picks in initial response
-    all_picks = unified_result.get("picks", [])
-    trimmed = {
-        "unified": {
-            **unified_result,
-            "picks": all_picks[:5],
-            "has_more": len(all_picks) > 5,
+    # Return first 10 picks per section in initial response
+    trimmed = {}
+    for mode_key, mode_result in full.items():
+        all_picks = mode_result.get("picks", [])
+        trimmed[mode_key] = {
+            **mode_result,
+            "picks": all_picks[:10],
+            "has_more": len(all_picks) > 10,
             "total_picks": len(all_picks),
         }
-    }
 
     set_cached("ai_picks_all", trimmed, ttl=effective_ttl)
     return trimmed
@@ -178,7 +192,7 @@ async def background_refresh_picks():
 
 
 @router.get("/picks")
-async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|long|discovery)$")):
+async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|bargain|long|discovery)$")):
     cache_key = f"ai_picks_{mode}"
     cached = get_cached(cache_key)
     if cached is not None:
@@ -248,8 +262,8 @@ async def get_ai_picks_more(mode: str):
     Must call /picks-all first to populate the cache.
     Instant response — no Claude call needed.
     """
-    if mode not in ("unified", "long", "discovery"):
-        raise HTTPException(400, "mode must be unified, long, or discovery")
+    if mode not in ("unified", "bargain", "long", "discovery"):
+        raise HTTPException(400, "mode must be unified, bargain, long, or discovery")
     full = get_cached("ai_picks_all_full")
     if not full or mode not in full:
         raise HTTPException(404, "No cached picks for this mode — load /ai/picks-all first")
@@ -268,9 +282,11 @@ async def get_ai_picks_status():
     has_picks = cached is not None
     generated_at = None
     if has_picks:
-        entry = (cached or {}).get("unified", {})
-        if entry:
-            generated_at = entry.get("generated_at")
+        for key in ("unified", "bargain"):
+            entry = (cached or {}).get(key, {})
+            if entry and entry.get("generated_at"):
+                generated_at = entry.get("generated_at")
+                break
     return {
         "has_picks": has_picks,
         "generating": _is_generating or _picks_lock.locked(),
@@ -287,7 +303,7 @@ async def refresh_ai_picks():
     """
     delete_cached("ai_picks_all")
     delete_cached("ai_picks_all_full")
-    for mode in ("unified", "long", "discovery"):
+    for mode in ("unified", "bargain", "long", "discovery"):
         delete_cached(f"ai_picks_{mode}")
     asyncio.create_task(background_refresh_picks())
     return {"status": "refreshing", "message": "AI picks refresh started in background"}

@@ -4,10 +4,11 @@ import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice } from "@/lib/utils";
 import {
-  Sparkles, RefreshCw, TrendingUp, TrendingDown, Minus,
-  ShieldAlert, Target, ArrowRight, AlertTriangle, Clock,
+  Sparkles, RefreshCw,
+  ShieldAlert, Target, ArrowRight, AlertTriangle,
   Search, CheckCircle, XCircle, MinusCircle,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Tag,
 } from "lucide-react";
 
 interface AIPicksProps {
@@ -49,7 +50,7 @@ const REC_CONFIG: Record<string, { icon: React.ReactNode; cls: string; bg: strin
 };
 
 export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
-  return <UnifiedPicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
+  return <AllPicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
 }
 
 // ─── Horizon badge ────────────────────────────────────────────────────────────
@@ -63,214 +64,56 @@ function HorizonBadge({ horizon }: { horizon?: string }) {
   );
 }
 
-// ─── Ticker analysis result card ──────────────────────────────────────────────
+// ─── Horizon filter bar ───────────────────────────────────────────────────────
 
-function TickerAnalysisCard({
-  analysis,
-  onSelect,
-  onSimulate,
+function HorizonFilterBar({
+  value,
+  counts,
+  onChange,
 }: {
-  analysis: any;
-  onSelect: () => void;
-  onSimulate?: () => void;
+  value: HorizonFilter;
+  counts: Record<HorizonFilter, number>;
+  onChange: (v: HorizonFilter) => void;
 }) {
-  const [calcOpen, setCalcOpen] = useState(false);
-  const rec = analysis.recommendation?.toLowerCase() as "buy" | "hold" | "avoid";
-  const recConf = REC_CONFIG[rec] ?? REC_CONFIG.hold;
-  const confidenceColor =
-    analysis.confidence >= 8 ? "text-emerald-400" :
-    analysis.confidence >= 6 ? "text-yellow-400" :
-    "text-red-400";
-  const hz = analysis.hold_horizon;
-
+  const options: { key: HorizonFilter; label: string }[] = [
+    { key: "all",    label: "All" },
+    { key: "1-3yr",  label: "1–3 yr" },
+    { key: "3-5yr",  label: "3–5 yr" },
+    { key: "5-10yr", label: "5–10 yr" },
+  ];
   return (
-    <div className={`rounded-xl border overflow-hidden ${recConf.bg.replace("border-", "border-")}`}>
-      {/* Header */}
-      <div className={`flex items-center justify-between px-4 py-3 border-b border-zinc-800/60 ${recConf.bg}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">
-            {analysis.ticker}
-          </button>
-          <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${recConf.bg} ${recConf.cls}`}>
-            {recConf.icon} {recConf.label}
-          </span>
-          {hz && <HorizonBadge horizon={hz} />}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
-            {analysis.confidence}/10
-            <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
-          </div>
+    <div className="flex items-center gap-1 flex-wrap">
+      {options.map((o) => {
+        const active = value === o.key;
+        const cnt = counts[o.key];
+        return (
           <button
-            onClick={() => setCalcOpen((o) => !o)}
-            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
-              calcOpen
-                ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
+              active
+                ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-300 font-semibold"
+                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600"
             }`}
           >
-            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            {o.label}
+            {cnt > 0 && (
+              <span className={`text-[10px] ${active ? "text-cyan-500" : "text-zinc-600"}`}>{cnt}</span>
+            )}
           </button>
-        </div>
-      </div>
-
-      {/* Price levels */}
-      <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800 bg-zinc-900/60">
-        <PriceTile label="Entry Zone" value={`${formatPrice(analysis.entry_low)} – ${formatPrice(analysis.entry_high)}`} className="text-zinc-200" />
-        <PriceTile label="Stop Loss" value={formatPrice(analysis.stop_loss)} className="text-red-400" />
-        <PriceTile label="Target" value={formatPrice(analysis.target)} className="text-emerald-400" />
-        <PriceTile label="Risk/Reward" value={analysis.risk_reward || "—"} className="text-cyan-400" />
-      </div>
-
-      {/* Confidence bar */}
-      <div className="px-4 py-1.5 bg-zinc-900/40 border-t border-zinc-800/40">
-        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${
-              analysis.confidence >= 8 ? "bg-emerald-500" :
-              analysis.confidence >= 6 ? "bg-yellow-500" : "bg-red-500"
-            }`}
-            style={{ width: `${(analysis.confidence / 10) * 100}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Thesis */}
-      <div className="px-4 pt-3 pb-2 bg-zinc-900/40">
-        <p className="text-sm text-zinc-400 leading-relaxed">{analysis.thesis}</p>
-        <p className="text-[10px] text-zinc-600 italic mt-2">
-          {hz ? `Long-term analysis (${HORIZON_LABELS[hz] ?? hz} horizon) · not financial advice` : "Long-term analysis · not financial advice"}
-        </p>
-      </div>
-
-      {/* Catalyst & Key Risk */}
-      {(analysis.catalyst || analysis.key_risk) && (
-        <div className="px-4 pb-3 bg-zinc-900/40 space-y-1">
-          {analysis.catalyst && (
-            <div className="flex items-start gap-1.5">
-              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.catalyst}</p>
-            </div>
-          )}
-          {analysis.key_risk && (
-            <div className="flex items-start gap-1.5">
-              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.key_risk}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {calcOpen && (
-        <InvestmentCalculator pick={analysis} onSimulate={onSimulate} />
-      )}
+        );
+      })}
     </div>
   );
 }
 
-// ─── Main picks card ──────────────────────────────────────────────────────────
+// ─── Price tile ───────────────────────────────────────────────────────────────
 
-function PickCard({
-  pick,
-  onSelect,
-  onSimulate,
-}: {
-  pick: any;
-  onSelect: () => void;
-  onSimulate?: () => void;
-}) {
-  const [calcOpen, setCalcOpen] = useState(false);
-  const rr = pick.risk_reward || "";
-  const tradeTypeClass = TRADE_TYPE_COLORS[pick.trade_type] || "bg-zinc-800 text-zinc-400 border-zinc-700";
-  const confidenceColor =
-    pick.confidence >= 8 ? "text-emerald-400" :
-    pick.confidence >= 6 ? "text-yellow-400" :
-    "text-red-400";
-
-  const risk = pick.entry_high && pick.stop_loss ? pick.entry_high - pick.stop_loss : null;
-  const reward = pick.entry_low && pick.target ? pick.target - pick.entry_low : null;
-
+function PriceTile({ label, value, className }: { label: string; value: string; className?: string }) {
   return (
-    <div className={`bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${calcOpen ? "border-cyan-800/50" : "border-zinc-800 hover:border-zinc-700"}`}>
-      {/* Header row */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/60">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xl font-bold text-cyan-400">#{pick.rank}</span>
-          <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">
-            {pick.ticker}
-          </button>
-          {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
-          {pick.trade_type && (
-            <span className={`text-[10px] px-2 py-0.5 rounded border ${tradeTypeClass}`}>
-              {pick.trade_type}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
-            {pick.confidence}/10
-            <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
-          </div>
-          <button
-            onClick={() => setCalcOpen((o) => !o)}
-            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
-              calcOpen
-                ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
-            }`}
-          >
-            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-          </button>
-        </div>
-      </div>
-
-      {/* Price levels */}
-      <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800">
-        <PriceTile label="Entry Zone" value={`${formatPrice(pick.entry_low)} – ${formatPrice(pick.entry_high)}`} className="text-zinc-200" />
-        <PriceTile label="Stop Loss" value={formatPrice(pick.stop_loss)} className="text-red-400" />
-        <PriceTile label="Target" value={formatPrice(pick.target)} className="text-emerald-400" />
-        <PriceTile label="Risk/Reward" value={rr || (risk && reward ? `1:${(reward / risk).toFixed(1)}` : "—")} className="text-cyan-400" />
-      </div>
-
-      {/* Confidence bar */}
-      <div className="px-4 py-1.5 border-t border-zinc-800/40">
-        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${
-              pick.confidence >= 8 ? "bg-emerald-500" :
-              pick.confidence >= 6 ? "bg-yellow-500" : "bg-red-500"
-            }`}
-            style={{ width: `${(pick.confidence / 10) * 100}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Thesis */}
-      <div className="px-4 pt-3 pb-2">
-        <p className="text-sm text-zinc-400 leading-relaxed">{pick.thesis}</p>
-      </div>
-
-      {/* Catalyst & Key Risk */}
-      {(pick.catalyst || pick.key_risk) && (
-        <div className="px-4 pb-3 space-y-1">
-          {pick.catalyst && (
-            <div className="flex items-start gap-1.5">
-              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{pick.catalyst}</p>
-            </div>
-          )}
-          {pick.key_risk && (
-            <div className="flex items-start gap-1.5">
-              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{pick.key_risk}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {calcOpen && (
-        <InvestmentCalculator pick={pick} onSimulate={onSimulate} />
-      )}
+    <div className="px-3 py-2.5 text-center">
+      <div className="text-[10px] text-zinc-600 mb-0.5 uppercase tracking-wider">{label}</div>
+      <div className={`text-xs font-semibold tabular-nums ${className}`}>{value}</div>
     </div>
   );
 }
@@ -279,8 +122,8 @@ function PickCard({
 
 function holdEstimate(pct: number, horizon?: string): string {
   if (horizon === "5-10yr") {
-    if (pct < 50)   return "3–5 years";
-    if (pct < 150)  return "5–8 years";
+    if (pct < 50)  return "3–5 years";
+    if (pct < 150) return "5–8 years";
     return "8–10+ years";
   }
   if (horizon === "3-5yr") {
@@ -288,7 +131,6 @@ function holdEstimate(pct: number, horizon?: string): string {
     if (pct < 60)  return "1–3 years";
     return "3–5 years";
   }
-  // 1-3yr or unknown
   if (pct < 5)  return "3–6 months";
   if (pct < 20) return "6–12 months";
   if (pct < 40) return "1–2 years";
@@ -337,7 +179,6 @@ function InvestmentCalculator({ pick, onSimulate }: { pick: any; onSimulate?: ()
       {shares > 0 ? (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            {/* Custom profit goal */}
             <div className="bg-zinc-900 rounded-lg p-3 border border-cyan-900/30">
               <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                 Hit
@@ -353,30 +194,25 @@ function InvestmentCalculator({ pick, onSimulate }: { pick: any; onSimulate?: ()
               </div>
               <div className="text-sm font-bold text-cyan-300 tabular-nums">{formatPrice(priceToGoal)}</div>
               <div className="text-[10px] text-zinc-500 mt-1">
-                +{pctToGoal.toFixed(2)}% move · est. <span className="text-zinc-400">{holdEstimate(pctToGoal, hz)}</span>
+                +{pctToGoal.toFixed(2)}% · est. <span className="text-zinc-400">{holdEstimate(pctToGoal, hz)}</span>
               </div>
             </div>
-
-            {/* Full target */}
             <div className="bg-zinc-900 rounded-lg p-3 border border-emerald-900/40">
-              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">At full target ({formatPrice(pick.target)})</div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">At target ({formatPrice(pick.target)})</div>
               <div className={`text-sm font-bold tabular-nums ${gainAtTarget >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {gainAtTarget >= 0 ? "+" : "−"}${Math.abs(gainAtTarget).toFixed(2)}
                 <span className="text-xs font-normal text-zinc-600 ml-1">({returnPct}%)</span>
               </div>
               <div className="text-[10px] text-zinc-500 mt-1">
-                +{pctToTarget.toFixed(1)}% move · est. <span className="text-zinc-400">{holdEstimate(pctToTarget, hz)}</span>
+                +{pctToTarget.toFixed(1)}% · est. <span className="text-zinc-400">{holdEstimate(pctToTarget, hz)}</span>
               </div>
             </div>
-
-            {/* Stop loss */}
             <div className="bg-zinc-900 rounded-lg p-3 border border-red-900/30">
-              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">Stop loss risk ({formatPrice(pick.stop_loss)})</div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">Stop loss ({formatPrice(pick.stop_loss)})</div>
               <div className="text-sm font-bold text-red-400 tabular-nums">−${lossAtStop.toFixed(2)}</div>
               <div className="text-[10px] text-zinc-500 mt-1">max loss if stop is hit</div>
             </div>
           </div>
-
           {pctToTarget > 0 && (
             <p className="text-[10px] text-zinc-600">
               Min to make ${goalAmt % 1 === 0 ? goalAmt.toFixed(0) : goalAmt.toFixed(2)} at target:{" "}
@@ -388,7 +224,6 @@ function InvestmentCalculator({ pick, onSimulate }: { pick: any; onSimulate?: ()
                   : " · Hold estimates based on target % move — actual timing depends on catalysts."}
             </p>
           )}
-
           {onSimulate && (
             <button
               onClick={onSimulate}
@@ -405,47 +240,152 @@ function InvestmentCalculator({ pick, onSimulate }: { pick: any; onSimulate?: ()
   );
 }
 
-// ─── Horizon filter toggle ────────────────────────────────────────────────────
+// ─── Pick detail card ─────────────────────────────────────────────────────────
 
-function HorizonFilterBar({
-  value,
-  counts,
-  onChange,
-}: {
-  value: HorizonFilter;
-  counts: Record<HorizonFilter, number>;
-  onChange: (v: HorizonFilter) => void;
-}) {
-  const options: { key: HorizonFilter; label: string }[] = [
-    { key: "all",    label: "All" },
-    { key: "1-3yr",  label: "1–3 yr" },
-    { key: "3-5yr",  label: "3–5 yr" },
-    { key: "5-10yr", label: "5–10 yr" },
-  ];
+function PickCard({ pick, onSelect, onSimulate }: { pick: any; onSelect: () => void; onSimulate?: () => void }) {
+  const [calcOpen, setCalcOpen] = useState(false);
+  const tradeTypeClass = TRADE_TYPE_COLORS[pick.trade_type] || "bg-zinc-800 text-zinc-400 border-zinc-700";
+  const confidenceColor =
+    pick.confidence >= 8 ? "text-emerald-400" : pick.confidence >= 6 ? "text-yellow-400" : "text-red-400";
+  const risk = pick.entry_high && pick.stop_loss ? pick.entry_high - pick.stop_loss : null;
+  const reward = pick.entry_low && pick.target ? pick.target - pick.entry_low : null;
+
   return (
-    <div className="flex items-center gap-1 flex-wrap">
-      {options.map((o) => {
-        const active = value === o.key;
-        const cnt = counts[o.key];
-        return (
+    <div className={`bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${calcOpen ? "border-cyan-800/50" : "border-zinc-800 hover:border-zinc-700"}`}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/60">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xl font-bold text-cyan-400">#{pick.rank}</span>
+          <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">{pick.ticker}</button>
+          {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
+          {pick.trade_type && (
+            <span className={`text-[10px] px-2 py-0.5 rounded border ${tradeTypeClass}`}>{pick.trade_type}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
+            {pick.confidence}/10
+            <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
+          </div>
           <button
-            key={o.key}
-            onClick={() => onChange(o.key)}
-            className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
-              active
-                ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-300 font-semibold"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600"
+            onClick={() => setCalcOpen((o) => !o)}
+            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
+              calcOpen ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400" : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
             }`}
           >
-            {o.label}
-            {cnt > 0 && (
-              <span className={`text-[10px] ${active ? "text-cyan-500" : "text-zinc-600"}`}>
-                {cnt}
-              </span>
-            )}
+            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
-        );
-      })}
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800">
+        <PriceTile label="Entry Zone" value={`${formatPrice(pick.entry_low)} – ${formatPrice(pick.entry_high)}`} className="text-zinc-200" />
+        <PriceTile label="Stop Loss" value={formatPrice(pick.stop_loss)} className="text-red-400" />
+        <PriceTile label="Target" value={formatPrice(pick.target)} className="text-emerald-400" />
+        <PriceTile label="Risk/Reward" value={pick.risk_reward || (risk && reward ? `1:${(reward / risk).toFixed(1)}` : "—")} className="text-cyan-400" />
+      </div>
+      <div className="px-4 py-1.5 border-t border-zinc-800/40">
+        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${pick.confidence >= 8 ? "bg-emerald-500" : pick.confidence >= 6 ? "bg-yellow-500" : "bg-red-500"}`}
+            style={{ width: `${(pick.confidence / 10) * 100}%` }}
+          />
+        </div>
+      </div>
+      <div className="px-4 pt-3 pb-2">
+        <p className="text-sm text-zinc-400 leading-relaxed">{pick.thesis}</p>
+      </div>
+      {(pick.catalyst || pick.key_risk) && (
+        <div className="px-4 pb-3 space-y-1">
+          {pick.catalyst && (
+            <div className="flex items-start gap-1.5">
+              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{pick.catalyst}</p>
+            </div>
+          )}
+          {pick.key_risk && (
+            <div className="flex items-start gap-1.5">
+              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{pick.key_risk}</p>
+            </div>
+          )}
+        </div>
+      )}
+      {calcOpen && <InvestmentCalculator pick={pick} onSimulate={onSimulate} />}
+    </div>
+  );
+}
+
+// ─── Ticker analysis card ─────────────────────────────────────────────────────
+
+function TickerAnalysisCard({ analysis, onSelect, onSimulate }: { analysis: any; onSelect: () => void; onSimulate?: () => void }) {
+  const [calcOpen, setCalcOpen] = useState(false);
+  const rec = analysis.recommendation?.toLowerCase() as "buy" | "hold" | "avoid";
+  const recConf = REC_CONFIG[rec] ?? REC_CONFIG.hold;
+  const confidenceColor =
+    analysis.confidence >= 8 ? "text-emerald-400" : analysis.confidence >= 6 ? "text-yellow-400" : "text-red-400";
+  const hz = analysis.hold_horizon;
+
+  return (
+    <div className={`rounded-xl border overflow-hidden ${recConf.bg.replace("border-", "border-")}`}>
+      <div className={`flex items-center justify-between px-4 py-3 border-b border-zinc-800/60 ${recConf.bg}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">{analysis.ticker}</button>
+          <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${recConf.bg} ${recConf.cls}`}>
+            {recConf.icon} {recConf.label}
+          </span>
+          {hz && <HorizonBadge horizon={hz} />}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
+            {analysis.confidence}/10
+            <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
+          </div>
+          <button
+            onClick={() => setCalcOpen((o) => !o)}
+            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
+              calcOpen ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400" : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
+            }`}
+          >
+            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800 bg-zinc-900/60">
+        <PriceTile label="Entry Zone" value={`${formatPrice(analysis.entry_low)} – ${formatPrice(analysis.entry_high)}`} className="text-zinc-200" />
+        <PriceTile label="Stop Loss" value={formatPrice(analysis.stop_loss)} className="text-red-400" />
+        <PriceTile label="Target" value={formatPrice(analysis.target)} className="text-emerald-400" />
+        <PriceTile label="Risk/Reward" value={analysis.risk_reward || "—"} className="text-cyan-400" />
+      </div>
+      <div className="px-4 py-1.5 bg-zinc-900/40 border-t border-zinc-800/40">
+        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${analysis.confidence >= 8 ? "bg-emerald-500" : analysis.confidence >= 6 ? "bg-yellow-500" : "bg-red-500"}`}
+            style={{ width: `${(analysis.confidence / 10) * 100}%` }}
+          />
+        </div>
+      </div>
+      <div className="px-4 pt-3 pb-2 bg-zinc-900/40">
+        <p className="text-sm text-zinc-400 leading-relaxed">{analysis.thesis}</p>
+        <p className="text-[10px] text-zinc-600 italic mt-2">
+          {hz ? `Long-term analysis (${HORIZON_LABELS[hz] ?? hz} horizon) · not financial advice` : "Long-term analysis · not financial advice"}
+        </p>
+      </div>
+      {(analysis.catalyst || analysis.key_risk) && (
+        <div className="px-4 pb-3 bg-zinc-900/40 space-y-1">
+          {analysis.catalyst && (
+            <div className="flex items-start gap-1.5">
+              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.catalyst}</p>
+            </div>
+          )}
+          {analysis.key_risk && (
+            <div className="flex items-start gap-1.5">
+              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.key_risk}</p>
+            </div>
+          )}
+        </div>
+      )}
+      {calcOpen && <InvestmentCalculator pick={analysis} onSimulate={onSimulate} />}
     </div>
   );
 }
@@ -477,21 +417,228 @@ function renderError(error: string) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Reusable picks panel ─────────────────────────────────────────────────────
 
-function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
+function PicksPanel({
+  mode,
+  label,
+  description,
+  accentCls,
+  data,
+  loading,
+  onTickerSelect,
+  onSimulate,
+}: {
+  mode: "unified" | "bargain";
+  label: string;
+  description: string;
+  accentCls: string;
+  data: any;
+  loading: boolean;
+  onTickerSelect: (t: string) => void;
+  onSimulate?: (t: string) => void;
+}) {
+  const [page, setPage] = useState(0);
+  const [page1Picks, setPage1Picks] = useState<any[]>([]);
+  const [loadingPage1, setLoadingPage1] = useState(false);
+  const [horizonFilter, setHorizonFilter] = useState<HorizonFilter>("all");
+  const [expandedPick, setExpandedPick] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [override, setOverride] = useState<any>(null);
+
+  const modeData = override ?? data;
+  const page0Picks: any[] = modeData?.picks ?? [];
+  const hasPage1 = modeData?.has_more ?? false;
+  const totalPages = hasPage1 || page1Picks.length > 0 ? 2 : 1;
+
+  // Reset when data changes (new fetch)
+  useEffect(() => {
+    setPage(0);
+    setPage1Picks([]);
+    setHorizonFilter("all");
+    setExpandedPick(null);
+  }, [data]);
+
+  const currentPagePicks = page === 0 ? page0Picks : page1Picks;
+
+  // Count horizons across all loaded picks
+  const allKnownPicks = [...page0Picks, ...page1Picks];
+  const horizonCounts: Record<HorizonFilter, number> = { all: allKnownPicks.length, "1-3yr": 0, "3-5yr": 0, "5-10yr": 0 };
+  for (const p of allKnownPicks) {
+    const h = p.hold_horizon as HorizonFilter;
+    if (h && h in horizonCounts) horizonCounts[h]++;
+  }
+
+  const filteredPicks = horizonFilter === "all"
+    ? currentPagePicks
+    : currentPagePicks.filter((p) => p.hold_horizon === horizonFilter);
+
+  const handleNextPage = async () => {
+    if (page === 1) return;
+    if (page1Picks.length === 0 && hasPage1) {
+      setLoadingPage1(true);
+      try {
+        const result = await api.aiPicksMore(mode) as any;
+        setPage1Picks(result.picks ?? []);
+      } catch {}
+      finally { setLoadingPage1(false); }
+    }
+    setPage(1);
+  };
+
+  const handleRetry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const result = await api.aiPicks(mode) as any;
+      if (result?.picks?.length > 0) setOverride(result);
+    } catch {}
+    finally { setRetrying(false); }
+  };
+
+  const isLoading = loading || retrying;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 gap-3 flex-wrap">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`font-semibold text-sm ${accentCls}`}>{label}</span>
+          <span className="text-[10px] text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">{description}</span>
+          {allKnownPicks.length > 0 && !isLoading && (
+            <span className="text-[10px] text-zinc-600">{allKnownPicks.length} picks</span>
+          )}
+          {modeData?.bias && (
+            <span className={`text-xs ${
+              modeData.bias === "bullish" ? "text-emerald-400" :
+              modeData.bias === "bearish" ? "text-red-400" : "text-yellow-400"
+            }`}>{modeData.bias}</span>
+          )}
+        </div>
+        {allKnownPicks.length > 0 && (
+          <HorizonFilterBar value={horizonFilter} counts={horizonCounts} onChange={setHorizonFilter} />
+        )}
+      </div>
+
+      {isLoading && (
+        <div className="px-4 py-3 space-y-2 animate-pulse">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+        </div>
+      )}
+
+      {modeData && !isLoading && (
+        <div className="px-4 py-3 space-y-3">
+          {modeData.market_summary && (
+            <p className="text-xs text-zinc-400 leading-relaxed">{modeData.market_summary}</p>
+          )}
+
+          {page0Picks.length === 0 && (
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-zinc-600 italic">Analysis temporarily unavailable.</p>
+              <button
+                onClick={handleRetry}
+                disabled={retrying}
+                className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-cyan-400 border border-zinc-700 hover:border-cyan-700 px-2 py-1 rounded transition-colors disabled:opacity-40"
+              >
+                <RefreshCw size={10} className={retrying ? "animate-spin" : ""} />
+                {retrying ? "Retrying…" : "Retry"}
+              </button>
+            </div>
+          )}
+
+          {filteredPicks.length === 0 && page0Picks.length > 0 && (
+            <p className="text-xs text-zinc-600 italic text-center py-2">No picks for this horizon on page {page + 1}.</p>
+          )}
+
+          {filteredPicks.length > 0 && (
+            <div className="space-y-1.5">
+              {filteredPicks.map((pick: any) => {
+                const key = `${mode}-${pick.ticker}-${pick.rank}`;
+                const isExpanded = expandedPick === key;
+                return (
+                  <div key={key} className="rounded-xl border border-zinc-800 overflow-hidden">
+                    <div className="flex items-center justify-between bg-zinc-800/60 px-3 py-2 gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs text-zinc-600 shrink-0">#{pick.rank}</span>
+                        <button
+                          onClick={() => onTickerSelect(pick.ticker)}
+                          className={`font-bold text-sm shrink-0 ${accentCls} hover:underline`}
+                        >
+                          {pick.ticker}
+                        </button>
+                        {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
+                        <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`text-xs font-bold tabular-nums ${
+                          pick.confidence >= 8 ? "text-emerald-400" : pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
+                        }`}>{pick.confidence}/10</span>
+                        <button
+                          onClick={() => {
+                            const next = isExpanded ? null : key;
+                            setExpandedPick(next);
+                            if (!isExpanded) onTickerSelect(pick.ticker);
+                          }}
+                          className="flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
+                        >
+                          Detail {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <PickCard
+                        pick={pick}
+                        onSelect={() => onTickerSelect(pick.ticker)}
+                        onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {totalPages > 1 && page0Picks.length > 0 && (
+            <div className="flex items-center justify-center gap-3 pt-2 border-t border-zinc-800/60">
+              <button
+                onClick={() => setPage(0)}
+                disabled={page === 0}
+                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-30 px-2 py-1 rounded transition-colors"
+              >
+                <ChevronLeft size={12} /> Prev
+              </button>
+              <span className="text-xs text-zinc-500 tabular-nums">
+                Page {page + 1} / {totalPages}
+              </span>
+              <button
+                onClick={handleNextPage}
+                disabled={page === totalPages - 1 || loadingPage1}
+                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-30 px-2 py-1 rounded transition-colors"
+              >
+                {loadingPage1 ? (
+                  <><RefreshCw size={10} className="animate-spin" /> Loading…</>
+                ) : (
+                  <>Next <ChevronRight size={12} /></>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Root component ───────────────────────────────────────────────────────────
+
+function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
   const [fetchKey, setFetchKey] = useState(0);
   const [tickerInput, setTickerInput] = useState("");
   const [tickerAnalysis, setTickerAnalysis] = useState<any>(null);
   const [tickerLoading, setTickerLoading] = useState(false);
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [analysisOpen, setAnalysisOpen] = useState(true);
-  const [expandedPick, setExpandedPick] = useState<string | null>(null);
-  const [horizonFilter, setHorizonFilter] = useState<HorizonFilter>("all");
-  const [extraPicks, setExtraPicks] = useState<any[]>([]);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [retrying, setRetrying] = useState(false);
-  const [modeOverride, setModeOverride] = useState<any>(null);
 
   const { data: allData, loading, error, refetch } = useData(
     () => api.aiPicksAll() as Promise<any>,
@@ -532,49 +679,10 @@ function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
   };
 
   const handleRefresh = async () => {
-    setExtraPicks([]);
-    setModeOverride(null);
-    setHorizonFilter("all");
     try { await api.aiRefresh(); } catch {}
     setFetchKey((k) => k + 1);
     refetch();
   };
-
-  const handleLoadMore = async () => {
-    if (loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const result = await api.aiPicksMore("unified") as any;
-      setExtraPicks(result.picks ?? []);
-    } catch {}
-    finally { setLoadingMore(false); }
-  };
-
-  const handleRetry = async () => {
-    if (retrying) return;
-    setRetrying(true);
-    try {
-      const result = await api.aiPicks("unified") as any;
-      if (result?.picks?.length > 0) setModeOverride(result);
-    } catch {}
-    finally { setRetrying(false); }
-  };
-
-  const modeData = modeOverride ?? allData?.unified;
-  const initialPicks: any[] = modeData?.picks ?? [];
-  const allPicks = [...initialPicks, ...extraPicks];
-  const hasMore = (modeData?.has_more ?? false) && extraPicks.length === 0;
-
-  // Count picks per horizon for filter badges
-  const horizonCounts: Record<HorizonFilter, number> = { all: allPicks.length, "1-3yr": 0, "3-5yr": 0, "5-10yr": 0 };
-  for (const p of allPicks) {
-    const h = p.hold_horizon as HorizonFilter;
-    if (h && h in horizonCounts) horizonCounts[h]++;
-  }
-
-  const visiblePicks = horizonFilter === "all"
-    ? allPicks
-    : allPicks.filter((p) => p.hold_horizon === horizonFilter);
 
   return (
     <div className="space-y-4">
@@ -630,20 +738,15 @@ function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
               onClick={() => setAnalysisOpen((o) => !o)}
               className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded-lg border border-zinc-700/50 hover:border-zinc-600 transition-colors mb-2"
             >
-              <span className="text-xs font-semibold text-zinc-300">
-                {tickerAnalysis.ticker} — Analysis
-                {tickerAnalysis.unified?.hold_horizon && (
-                  <span className="ml-2">
-                    <HorizonBadge horizon={tickerAnalysis.unified.hold_horizon} />
-                  </span>
-                )}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-zinc-300">{tickerAnalysis.ticker} — Analysis</span>
+                {tickerAnalysis.unified?.hold_horizon && <HorizonBadge horizon={tickerAnalysis.unified.hold_horizon} />}
+              </div>
               <span className="text-xs text-zinc-500 flex items-center gap-1">
                 {analysisOpen ? "Collapse" : "Expand"}
                 {analysisOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
               </span>
             </button>
-
             {analysisOpen && tickerAnalysis.unified && (
               <TickerAnalysisCard
                 analysis={tickerAnalysis.unified}
@@ -655,11 +758,11 @@ function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
         )}
       </div>
 
-      {/* Header */}
+      {/* Header bar */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
-          <span className="text-sm font-semibold text-zinc-200">Long-Term Picks</span>
+          <span className="text-sm font-semibold text-zinc-200">AI Picks</span>
           {allData && !loading && (
             <span className="text-[10px] text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">
               {allData.unified?.generated_at ?? ""}
@@ -677,7 +780,7 @@ function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
           </button>
           {loading && loadingSeconds >= 10 && (
             <span className="text-[10px] text-zinc-600 text-right">
-              {loadingSeconds < 60 ? "AI warming up — usually 30–90s" : "Almost there…"}
+              {loadingSeconds < 60 ? "AI warming up — usually 45–120s" : "Almost there…"}
             </span>
           )}
         </div>
@@ -685,142 +788,33 @@ function UnifiedPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
 
       {error && renderError(error)}
 
-      {/* Unified panel */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-        {/* Panel header with horizon filter */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 gap-3 flex-wrap">
-          <div className="flex items-center gap-2 min-w-0 shrink-0">
-            <span className="font-semibold text-sm text-cyan-400">Long-Term Picks</span>
-            {allPicks.length > 0 && !loading && (
-              <span className="text-[10px] text-zinc-600">{allPicks.length} picks</span>
-            )}
-            {modeData?.bias && (
-              <span className={`text-xs ${
-                modeData.bias === "bullish" ? "text-emerald-400" :
-                modeData.bias === "bearish" ? "text-red-400" : "text-yellow-400"
-              }`}>{modeData.bias}</span>
-            )}
-          </div>
-          {allPicks.length > 0 && (
-            <HorizonFilterBar value={horizonFilter} counts={horizonCounts} onChange={setHorizonFilter} />
-          )}
-        </div>
+      {/* Pick List */}
+      <PicksPanel
+        mode="unified"
+        label="Pick List"
+        description="long-term quality"
+        accentCls="text-cyan-400"
+        data={allData?.unified}
+        loading={loading}
+        onTickerSelect={onTickerSelect}
+        onSimulate={onSimulate}
+      />
 
-        {(loading || retrying) && (
-          <div className="px-4 py-3 space-y-2 animate-pulse">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-8 bg-zinc-800 rounded" />
-            ))}
-          </div>
-        )}
-
-        {modeData && !loading && !retrying && (
-          <div className="px-4 py-3 space-y-3">
-            {modeData.market_summary && (
-              <p className="text-xs text-zinc-400 leading-relaxed">{modeData.market_summary}</p>
-            )}
-
-            {allPicks.length === 0 && (
-              <div className="flex items-center gap-3">
-                <p className="text-xs text-zinc-600 italic">Analysis temporarily unavailable.</p>
-                <button
-                  onClick={handleRetry}
-                  disabled={retrying}
-                  className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-cyan-400 border border-zinc-700 hover:border-cyan-700 px-2 py-1 rounded transition-colors disabled:opacity-40"
-                >
-                  <RefreshCw size={10} className={retrying ? "animate-spin" : ""} />
-                  {retrying ? "Retrying…" : "Retry"}
-                </button>
-              </div>
-            )}
-
-            {visiblePicks.length === 0 && allPicks.length > 0 && (
-              <p className="text-xs text-zinc-600 italic text-center py-2">
-                No picks for this horizon filter yet. Try a different range.
-              </p>
-            )}
-
-            {visiblePicks.length > 0 && (
-              <div className="space-y-1.5">
-                {visiblePicks.map((pick: any) => {
-                  const key = `unified-${pick.ticker}`;
-                  const isExpanded = expandedPick === key;
-                  return (
-                    <div key={key} className="rounded-xl border border-zinc-800 overflow-hidden">
-                      {/* Compact row */}
-                      <div className="flex items-center justify-between bg-zinc-800/60 px-3 py-2 gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs text-zinc-600 shrink-0">#{pick.rank}</span>
-                          <button
-                            onClick={() => onTickerSelect(pick.ticker)}
-                            className="font-bold text-sm shrink-0 text-cyan-400 hover:underline"
-                          >
-                            {pick.ticker}
-                          </button>
-                          {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
-                          <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className={`text-xs font-bold tabular-nums ${
-                            pick.confidence >= 8 ? "text-emerald-400" :
-                            pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
-                          }`}>{pick.confidence}/10</span>
-                          <button
-                            onClick={() => {
-                              const next = isExpanded ? null : key;
-                              setExpandedPick(next);
-                              if (!isExpanded) onTickerSelect(pick.ticker);
-                            }}
-                            className="flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
-                          >
-                            Detail {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                          </button>
-                        </div>
-                      </div>
-                      {isExpanded && (
-                        <PickCard
-                          pick={pick}
-                          onSelect={() => onTickerSelect(pick.ticker)}
-                          onSimulate={onSimulate ? () => onSimulate(pick.ticker) : undefined}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-
-                {hasMore && (
-                  <button
-                    onClick={handleLoadMore}
-                    disabled={loadingMore}
-                    className="w-full text-xs text-zinc-500 hover:text-zinc-300 py-1.5 border border-zinc-800 rounded-lg transition-colors disabled:opacity-40"
-                  >
-                    {loadingMore ? (
-                      <span className="flex items-center justify-center gap-1.5">
-                        <RefreshCw size={10} className="animate-spin" /> Loading more picks…
-                      </span>
-                    ) : "Show more picks ↓"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Bargain Buys */}
+      <PicksPanel
+        mode="bargain"
+        label="Bargain Buys"
+        description="value & undervalued"
+        accentCls="text-emerald-400"
+        data={allData?.bargain}
+        loading={loading}
+        onTickerSelect={onTickerSelect}
+        onSimulate={onSimulate}
+      />
 
       <p className="text-[10px] text-zinc-700 italic px-1">
         AI-generated for simulation purposes only. Not financial advice. Always verify independently.
       </p>
-    </div>
-  );
-}
-
-// ─── Price tile ───────────────────────────────────────────────────────────────
-
-function PriceTile({ label, value, className }: { label: string; value: string; className?: string }) {
-  return (
-    <div className="px-3 py-2.5 text-center">
-      <div className="text-[10px] text-zinc-600 mb-0.5 uppercase tracking-wider">{label}</div>
-      <div className={`text-xs font-semibold tabular-nums ${className}`}>{value}</div>
     </div>
   );
 }

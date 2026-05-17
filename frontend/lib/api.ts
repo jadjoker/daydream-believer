@@ -67,7 +67,7 @@ export const api = {
   tickerEarnings: (ticker: string) => apiFetch(`/earnings/ticker/${ticker}`),
 
   // AI
-  aiPicks: (mode: "unified" | "long" | "discovery" = "unified") => apiFetch(`/ai/picks?mode=${mode}`),
+  aiPicks: (mode: "unified" | "bargain" | "long" | "discovery" = "unified") => apiFetch(`/ai/picks?mode=${mode}`),
   aiPicksAll: () => apiFetch("/ai/picks-all"),
   aiPicksMore: (mode: string) => apiFetch(`/ai/picks-more/${mode}`),
   aiPicksStatus: () => apiFetch("/ai/picks-status"),
