@@ -499,15 +499,26 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
           <span className="text-sm font-semibold text-zinc-200">Analyze Any Stock</span>
         </div>
         <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Enter a ticker to get Short, Long & Discovery analysis"
-            value={tickerInput}
-            onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
-            maxLength={10}
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
-          />
+          <div className="relative flex-1">
+            <input
+              type="text"
+              placeholder="Enter a ticker to get Short, Long & Discovery analysis"
+              value={tickerInput}
+              onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
+              maxLength={10}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors pr-7"
+            />
+            {tickerInput && (
+              <button
+                onClick={() => { setTickerInput(""); setTickerAnalysis(null); setTickerError(null); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
+                tabIndex={-1}
+              >
+                <XCircle size={14} />
+              </button>
+            )}
+          </div>
           <button
             onClick={handleAnalyzeTicker}
             disabled={tickerLoading || !tickerInput.trim()}
@@ -616,6 +627,9 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
               <div className="flex items-center gap-2 min-w-0">
                 <span className={`font-semibold text-sm shrink-0 ${cfg.accentCls}`}>{cfg.label}</span>
                 <span className={`text-[10px] border rounded px-1.5 py-0.5 shrink-0 ${cfg.badgeCls}`}>{cfg.desc}</span>
+                {picks.length > 0 && !modeLoading && (
+                  <span className="text-[10px] text-zinc-600 shrink-0">{picks.length} picks</span>
+                )}
               </div>
               {modeData?.bias && (
                 <span className={`text-xs shrink-0 ${
