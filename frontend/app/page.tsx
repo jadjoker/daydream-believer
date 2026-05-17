@@ -6,13 +6,12 @@ import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useRef, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { TrendingUp } from "lucide-react";
 
 export default function Dashboard() {
   const [selectedTicker, setSelectedTicker] = useState("");
   const router = useRouter();
-  const chartPanelRef = useRef<HTMLDivElement>(null);
 
   const { data: quote } = useData(
     () => selectedTicker ? api.quote(selectedTicker) as Promise<any> : Promise.resolve(null),
@@ -22,12 +21,6 @@ export default function Dashboard() {
 
   const handleTickerSelect = useCallback((ticker: string) => {
     setSelectedTicker(ticker);
-    // On mobile (< lg breakpoint), scroll chart into view after a short paint delay
-    if (window.innerWidth < 1024) {
-      setTimeout(() => {
-        chartPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
-    }
   }, []);
 
   const handleSimulate = (ticker: string) => {
@@ -66,7 +59,6 @@ export default function Dashboard() {
 
           {/* Chart panel — hidden on mobile until a ticker is selected */}
           <div
-            ref={chartPanelRef}
             className={`lg:sticky lg:top-16 space-y-0 ${selectedTicker ? "block" : "hidden lg:block"}`}
           >
             <StockChart ticker={selectedTicker} height={500} />

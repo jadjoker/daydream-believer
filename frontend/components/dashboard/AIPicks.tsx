@@ -576,7 +576,11 @@ function PicksPanel({
                           pick.confidence >= 8 ? "text-emerald-400" : pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
                         }`}>{pick.confidence}/10</span>
                         <button
-                          onClick={() => setExpandedPick(isExpanded ? null : key)}
+                          onClick={() => {
+                            const expanding = !isExpanded;
+                            setExpandedPick(expanding ? key : null);
+                            if (expanding) onTickerSelect(pick.ticker);
+                          }}
                           className="flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded transition-colors"
                         >
                           Detail {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
