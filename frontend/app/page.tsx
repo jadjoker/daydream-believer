@@ -6,18 +6,29 @@ import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { TrendingUp } from "lucide-react";
 
 export default function Dashboard() {
   const [selectedTicker, setSelectedTicker] = useState("");
   const router = useRouter();
+  const chartPanelRef = useRef<HTMLDivElement>(null);
 
   const { data: quote } = useData(
     () => selectedTicker ? api.quote(selectedTicker) as Promise<any> : Promise.resolve(null),
     [selectedTicker],
     { refreshInterval: selectedTicker ? 60000 : 0 }
   );
+
+  const handleTickerSelect = useCallback((ticker: string) => {
+    setSelectedTicker(ticker);
+    // On mobile (< lg breakpoint), scroll chart into view after a short paint delay
+    if (window.innerWidth < 1024) {
+      setTimeout(() => {
+        chartPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    }
+  }, []);
 
   const handleSimulate = (ticker: string) => {
     router.push(`/simulator?ticker=${encodeURIComponent(ticker)}`);
@@ -49,17 +60,18 @@ export default function Dashboard() {
       <div className="max-w-[1600px] mx-auto px-3 md:px-4 py-4">
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4 items-start">
           <AIPicks
-            onTickerSelect={setSelectedTicker}
+            onTickerSelect={handleTickerSelect}
             onSimulate={handleSimulate}
           />
 
-          {/* Sticky chart + info panel */}
-          <div className="lg:sticky lg:top-16 space-y-0">
+          {/* Chart panel — hidden on mobile until a ticker is selected */}
+          <div
+            ref={chartPanelRef}
+            className={`lg:sticky lg:top-16 space-y-0 ${selectedTicker ? "block" : "hidden lg:block"}`}
+          >
             <StockChart ticker={selectedTicker} height={500} />
 
-            {quote && (
-              <StockInfoBar quote={quote} />
-            )}
+            {quote && <StockInfoBar quote={quote} />}
 
             {selectedTicker && (
               <div className="mt-2 flex justify-end">

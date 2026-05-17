@@ -28,8 +28,8 @@ export default function SimulatorPage() {
           </Link>
           <span className="text-base font-bold text-cyan-400">daydream</span>
           <span className="text-base font-light text-zinc-400 hidden sm:inline">believer</span>
-          <span className="text-xs text-zinc-600 border-l border-zinc-800 pl-3 ml-0.5 hidden sm:inline flex items-center gap-1">
-            <TrendingUp size={10} className="inline mr-1" />
+          <span className="hidden sm:flex items-center gap-1 text-xs text-zinc-600 border-l border-zinc-800 pl-3 ml-0.5">
+            <TrendingUp size={10} />
             Paper Trader
           </span>
           <div className="ml-auto text-xs text-zinc-700 hidden lg:block">

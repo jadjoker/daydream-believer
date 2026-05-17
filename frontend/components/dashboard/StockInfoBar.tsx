@@ -30,32 +30,30 @@ interface StockInfoBarProps {
     week_52_low?: number | null;
     dividend_yield?: number | null;
     dividend_rate?: number | null;
-    volume?: number | null;
-    avg_volume?: number | null;
   };
 }
 
-const STATS: { label: string; key: keyof StockInfoBarProps["quote"]; render: (v: any) => string }[] = [
-  { label: "Open",         key: "open",          render: (v) => v != null ? formatPrice(v) : "—" },
-  { label: "Mkt Cap",      key: "market_cap",    render: fmtCap },
-  { label: "Dividend",     key: "dividend_yield", render: fmtPct },
-  { label: "High",         key: "day_high",       render: (v) => v != null ? formatPrice(v) : "—" },
-  { label: "P/E Ratio",   key: "pe_ratio",       render: (v) => fmt(v) },
-  { label: "Qtrly Div",   key: "dividend_rate",  render: (v) => v != null ? `$${fmt(v)}` : "—" },
-  { label: "Low",          key: "day_low",        render: (v) => v != null ? formatPrice(v) : "—" },
-  { label: "52-wk High",  key: "week_52_high",   render: (v) => v != null ? formatPrice(v) : "—" },
-  { label: "52-wk Low",   key: "week_52_low",    render: (v) => v != null ? formatPrice(v) : "—" },
+const STATS = [
+  { label: "Open",        render: (q: StockInfoBarProps["quote"]) => q.open        != null ? formatPrice(q.open)        : "—" },
+  { label: "Mkt Cap",     render: (q: StockInfoBarProps["quote"]) => fmtCap(q.market_cap) },
+  { label: "Dividend",    render: (q: StockInfoBarProps["quote"]) => fmtPct(q.dividend_yield) },
+  { label: "High",        render: (q: StockInfoBarProps["quote"]) => q.day_high     != null ? formatPrice(q.day_high)    : "—" },
+  { label: "P/E Ratio",  render: (q: StockInfoBarProps["quote"]) => fmt(q.pe_ratio) },
+  { label: "Qtrly Div",  render: (q: StockInfoBarProps["quote"]) => q.dividend_rate != null ? `$${fmt(q.dividend_rate)}` : "—" },
+  { label: "Low",         render: (q: StockInfoBarProps["quote"]) => q.day_low      != null ? formatPrice(q.day_low)     : "—" },
+  { label: "52-wk High", render: (q: StockInfoBarProps["quote"]) => q.week_52_high  != null ? formatPrice(q.week_52_high): "—" },
+  { label: "52-wk Low",  render: (q: StockInfoBarProps["quote"]) => q.week_52_low   != null ? formatPrice(q.week_52_low) : "—" },
 ];
 
 export default function StockInfoBar({ quote }: StockInfoBarProps) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 mt-2">
-      <div className="grid grid-cols-3 gap-x-6 gap-y-1.5">
-        {STATS.map(({ label, key, render }) => (
-          <div key={label} className="flex items-center justify-between gap-2 min-w-0">
-            <span className="text-xs text-zinc-500 shrink-0">{label}</span>
-            <span className="text-xs font-medium text-zinc-200 tabular-nums truncate text-right">
-              {render(quote[key])}
+      <div className="grid grid-cols-3 gap-x-3 gap-y-3">
+        {STATS.map(({ label, render }) => (
+          <div key={label} className="flex flex-col gap-0.5 min-w-0">
+            <span className="text-[10px] text-zinc-500 leading-none">{label}</span>
+            <span className="text-xs font-semibold text-zinc-200 tabular-nums truncate">
+              {render(quote)}
             </span>
           </div>
         ))}
