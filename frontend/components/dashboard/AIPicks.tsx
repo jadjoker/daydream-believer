@@ -59,13 +59,11 @@ function TickerAnalysisCard({
   mode = "short",
   onSelect,
   onSimulate,
-  panelAvoidReason,
 }: {
   analysis: any;
   mode?: "short" | "long" | "discovery";
   onSelect: () => void;
   onSimulate?: () => void;
-  panelAvoidReason?: string;
 }) {
   const [calcOpen, setCalcOpen] = useState(false);
   const rec = analysis.recommendation?.toLowerCase() as "buy" | "hold" | "avoid";
@@ -130,20 +128,6 @@ function TickerAnalysisCard({
           />
         </div>
       </div>
-
-      {/* Contradiction warning — shown when panel flagged this ticker as Avoid */}
-      {panelAvoidReason && analysis.recommendation?.toLowerCase() === "buy" && (
-        <div className="mx-4 mt-3 flex items-start gap-2 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
-          <AlertTriangle size={12} className="text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-[11px] font-semibold text-amber-400">Contradicts panel picks</p>
-            <p className="text-[10px] text-amber-300/70 mt-0.5">
-              This ticker was flagged <span className="font-semibold">AVOID</span> in the AI picks panel for this timeframe.
-              {panelAvoidReason && ` Panel reason: ${panelAvoidReason}`}
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Thesis — kept exactly as-is */}
       <div className="px-4 py-3 bg-zinc-900/40">
@@ -575,9 +559,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                 {ALL_MODE_CONFIGS.map((cfg) => {
                   const a = tickerAnalysis[cfg.mode];
                   if (!a) return null;
-                  const panelAvoid: string[] = allData?.[cfg.mode]?.avoid ?? [];
-                  const isAvoided = panelAvoid.includes(a.ticker);
-                  const avoidReason = isAvoided ? (allData?.[cfg.mode]?.avoid_reason ?? "") : undefined;
                   return (
                     <div key={cfg.mode}>
                       <div className={`text-[10px] font-semibold uppercase tracking-wider mb-1 ${cfg.accentCls}`}>
@@ -588,7 +569,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                         mode={cfg.mode}
                         onSelect={() => onTickerSelect(a.ticker)}
                         onSimulate={onSimulate ? () => onSimulate(a.ticker) : undefined}
-                        panelAvoidReason={avoidReason}
                       />
                     </div>
                   );
@@ -744,20 +724,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                   </div>
                 )}
 
-                {/* Avoid */}
-                {modeData.avoid?.length > 0 && (
-                  <div className="flex items-center gap-2 flex-wrap pt-1">
-                    <span className="text-[10px] text-red-500 font-semibold uppercase">Avoid:</span>
-                    {modeData.avoid.map((t: string) => (
-                      <span key={t} className="text-[10px] font-bold bg-red-500/10 border border-red-500/20 text-red-400 px-1.5 py-0.5 rounded">
-                        {t}
-                      </span>
-                    ))}
-                    {modeData.avoid_reason && (
-                      <span className="text-[10px] text-zinc-600 italic">{modeData.avoid_reason}</span>
-                    )}
-                  </div>
-                )}
               </div>
             )}
           </div>
