@@ -781,7 +781,7 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
     model_map = EQUITY_MODEL
 
     quote_results = await _batch_gather([yf_svc.get_quote(t) for t in all_tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in all_tickers], batch_size=3, delay=0.5)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in all_tickers], batch_size=3, delay=1.2)
 
     candidates = []
     for ticker, quote, fund in zip(all_tickers, quote_results, fund_results):
@@ -1277,7 +1277,7 @@ async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
     model_map = {t: m for t, m in disc_entries}
 
     quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=0.5)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=1.2)
 
     candidates = []
     for ticker, quote, fund in zip(tickers, quote_results, fund_results):
@@ -1542,7 +1542,7 @@ async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
     tickers = [t for t, _ in BARGAIN_UNIVERSE]
 
     quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=0.5)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=1.2)
 
     candidates = []
     for ticker, quote, fund in zip(tickers, quote_results, fund_results):

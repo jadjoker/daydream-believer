@@ -103,12 +103,16 @@ async def _inner_generate_all_picks() -> dict:
     # Phase 1: market snapshot (cached 5 min, only 4 calls)
     market_data = await _build_market_snapshot()
 
-    # Phase 2: pre-warm screening caches in parallel (failures are non-fatal)
-    await asyncio.gather(
+    # Phase 2: pre-warm screening caches sequentially — running both in parallel
+    # doubles the concurrent Finnhub call rate and triggers 429s on the free tier.
+    for _screen in [
         ai_service.screen_longterm_candidates(top_n=16),
         ai_service.screen_bargain_candidates(top_n=14),
-        return_exceptions=True,
-    )
+    ]:
+        try:
+            await _screen
+        except Exception:
+            pass
 
     def _error_result() -> dict:
         return {
