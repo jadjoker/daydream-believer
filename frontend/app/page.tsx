@@ -1,6 +1,9 @@
 "use client";
 import AIPicks from "@/components/dashboard/AIPicks";
 import StockChart from "@/components/dashboard/StockChart";
+import StockInfoBar from "@/components/dashboard/StockInfoBar";
+import { useData } from "@/hooks/useData";
+import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -10,12 +13,14 @@ export default function Dashboard() {
   const [selectedTicker, setSelectedTicker] = useState("");
   const router = useRouter();
 
+  const { data: quote } = useData(
+    () => selectedTicker ? api.quote(selectedTicker) as Promise<any> : Promise.resolve(null),
+    [selectedTicker],
+    { refreshInterval: selectedTicker ? 60000 : 0 }
+  );
+
   const handleSimulate = (ticker: string) => {
     router.push(`/simulator?ticker=${encodeURIComponent(ticker)}`);
-  };
-
-  const handleTickerSelect = (ticker: string) => {
-    setSelectedTicker(ticker);
   };
 
   return (
@@ -44,16 +49,18 @@ export default function Dashboard() {
       <div className="max-w-[1600px] mx-auto px-3 md:px-4 py-4">
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4 items-start">
           <AIPicks
-            onTickerSelect={handleTickerSelect}
+            onTickerSelect={setSelectedTicker}
             onSimulate={handleSimulate}
           />
 
-          {/* Sticky chart panel */}
-          <div className="lg:sticky lg:top-16">
-            <StockChart
-              ticker={selectedTicker}
-              height={580}
-            />
+          {/* Sticky chart + info panel */}
+          <div className="lg:sticky lg:top-16 space-y-0">
+            <StockChart ticker={selectedTicker} height={500} />
+
+            {quote && (
+              <StockInfoBar quote={quote} />
+            )}
+
             {selectedTicker && (
               <div className="mt-2 flex justify-end">
                 <Link
