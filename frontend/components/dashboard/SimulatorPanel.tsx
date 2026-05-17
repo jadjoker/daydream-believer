@@ -11,17 +11,18 @@ import { Badge } from "@/components/ui/Badge";
 import {
   TrendingUp, DollarSign, Target, RefreshCw,
   PlusCircle, History, BarChart2, AlertCircle, CheckCircle2, XCircle,
-  Repeat2, Trash2, Play, LineChart,
+  Repeat2, Trash2, Play, LineChart, Search,
 } from "lucide-react";
 import StockChart from "@/components/dashboard/StockChart";
 
 interface SimulatorPanelProps {
   ticker: string;
+  onTickerChange?: (ticker: string) => void;
 }
 
 type View = "trade" | "portfolio" | "history" | "accuracy" | "chart" | "recurring";
 
-export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
+export default function SimulatorPanel({ ticker, onTickerChange }: SimulatorPanelProps) {
   const { state, loading, buy, sell, addFunds, reset, refetch, stats } = useSimulator();
   const [view, setView] = useState<View>(() => {
     if (typeof window !== "undefined") {
@@ -96,6 +97,11 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
             </button>
           </div>
         </div>
+
+        {/* Ticker search — shown only on standalone simulator page */}
+        {onTickerChange && (
+          <TickerSearch current={ticker} onChange={onTickerChange} />
+        )}
         {loading && <div className="text-xs text-zinc-500 mb-2">Loading shared state…</div>}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard label="Cash" value={`$${formatNum(state.cash, 2)}`} valueClass="text-zinc-200" />
@@ -1000,6 +1006,41 @@ function RecurringView({ defaultTicker, onStateChange }: { defaultTicker: string
       <p className="text-[10px] text-zinc-700 italic px-1">
         Recurring plans execute at live prices when you click Execute. Backfill uses real historical adjusted closing prices. This is a paper trading simulator — not real money.
       </p>
+    </div>
+  );
+}
+
+// ─── Ticker search (standalone simulator page) ────────────────────────────────
+
+function TickerSearch({ current, onChange }: { current: string; onChange: (t: string) => void }) {
+  const [input, setInput] = useState(current);
+
+  const submit = () => {
+    const t = input.trim().toUpperCase();
+    if (t) onChange(t);
+  };
+
+  return (
+    <div className="flex gap-2 mb-3">
+      <div className="relative flex-1">
+        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+        <input
+          type="text"
+          placeholder="Enter ticker (e.g. AAPL, TSLA)"
+          value={input}
+          onChange={(e) => setInput(e.target.value.toUpperCase())}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          maxLength={10}
+          className="w-full pl-8 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+        />
+      </div>
+      <button
+        onClick={submit}
+        disabled={!input.trim()}
+        className="px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors disabled:opacity-40"
+      >
+        Load
+      </button>
     </div>
   );
 }
