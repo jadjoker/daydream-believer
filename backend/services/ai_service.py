@@ -1415,12 +1415,9 @@ async def analyze_ticker_all_modes(
 
     if not price:
         err = {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
-        return {"short": err, "long": err, "discovery": err}
+        return {"long": err, "discovery": err}
 
     regime = assess_market_regime(market_overview)
-
-    atr = ta_data.get("atr_14")
-    short_levels = compute_atr_levels(price, atr)
 
     ema50 = ta_data.get("ema_50")
     long_stop = round(ema50 * 0.97, 2) if ema50 and ema50 < price * 0.92 else round(price * 0.85, 2)
@@ -1479,57 +1476,42 @@ async def analyze_ticker_all_modes(
         discovery_eligible = model in _DISCOVERY_ELIGIBLE
         model_context = f"""
 BUSINESS MODEL: {model}
-- Short-term: TA signals and regime are the primary lens regardless of business model
-- Long-term: {'focus on ARR/revenue growth rate, gross margins, and platform moat' if model in ('saas','platform') else 'focus on fundamentals appropriate to this business type'}
+- Conviction (12-month): {'focus on ARR/revenue growth rate, gross margins, and platform moat' if model in ('saas','platform') else 'focus on fundamentals appropriate to this business type'}
 - Discovery (10-year): {'this business has genuine platform economics — evaluate network effects, TAM, and growth compounding' if discovery_eligible else f'NOTE: {model} businesses rarely have the platform moat required for 10x in 10 years — be honest about structural limitations'}"""
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
     change_label = "last close" if market_overview.get("market_status") in ("closed", "pre-market") else "today"
 
-    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 3 investment horizons simultaneously.{time_note}
+    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 2 investment horizons simultaneously.{time_note}
 STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
 TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'} | Summary: {ta_data.get('signal_summary') or (f'Price action: {change_pct_atm:+.1f}% ({change_label})' if change_pct_atm else 'Price action analysis')}
 FUNDAMENTALS: {fund_str}
 MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} — {regime['vix_regime']}{model_context}
 
-━━━ HORIZON 1: DAY TRADING (for {next_trading_day_label}'s open) ━━━
-Entry: ${short_levels['entry_low']:.2f}–${short_levels['entry_high']:.2f} | Stop: ${short_levels['stop_loss']:.2f} | Target: ${short_levels['target_2r']:.2f} | R/R 1:{short_rr}
-BUY if TA aligns with regime. HOLD if mixed. AVOID if setup is broken or against regime.
-
-━━━ HORIZON 2: LONG-TERM (6–12 months) ━━━
+━━━ HORIZON 1: CONVICTION PICKS (12-month thesis) ━━━
 Entry: ${long_levels['entry_low']:.2f}–${long_levels['entry_high']:.2f} | Stop: ${long_levels['stop_loss']:.2f} | Target: ${long_levels['target']:.2f} | R/R 1:{long_rr}
 BUY if fundamentals are strong and valuation reasonable. HOLD if good but expensive. AVOID if declining metrics.
 
-━━━ HORIZON 3: 10-YEAR DISCOVERY ━━━
+━━━ HORIZON 2: DISCOVERY (10-year compounder) ━━━
 Entry: ${disc_levels['entry_low']:.2f}–${disc_levels['entry_high']:.2f} | Stop: ${disc_levels['stop_loss']:.2f} | Target: ${disc_levels['target']:.2f} (2.5x base) | R/R 1:{disc_rr}
 BUY only if this company could genuinely dominate its market in 10 years. HOLD if interesting but unclear. AVOID if no defensible platform moat or declining growth.
 
-THESIS RULES — apply to ALL three horizons:
+THESIS RULES — apply to BOTH horizons:
 - Every thesis sentence must cite at least one specific number from the data above
-- Short-term thesis: cite TA signal values (RSI, MACD, volume)
-- Long-term thesis: cite fundamental metrics (revenue growth %, margins, valuation ratios)
+- Conviction thesis: cite fundamental metrics (revenue growth %, margins, valuation ratios)
 - Discovery thesis: cite growth rate + explain the specific moat (network effects, switching costs, data advantage)
 - For discovery, if the business model note says this is not a platform-economics business, be direct — AVOID with a clear explanation
 
 Respond ONLY with valid JSON, no markdown:
 {{
-  "short": {{
-    "ticker": "{ticker}", "recommendation": "buy", "trade_type": "momentum",
-    "entry_low": {short_levels['entry_low']}, "entry_high": {short_levels['entry_high']},
-    "stop_loss": {short_levels['stop_loss']}, "target": {short_levels['target_2r']},
-    "risk_reward": "1:{short_rr}", "confidence": 6,
-    "thesis": "2 sentences with specific TA signal values.",
-    "catalyst": "Specific short-term trigger",
-    "key_risk": "Main risk to this day trade setup"
-  }},
   "long": {{
     "ticker": "{ticker}", "recommendation": "hold", "trade_type": "growth",
     "entry_low": {long_levels['entry_low']}, "entry_high": {long_levels['entry_high']},
     "stop_loss": {long_levels['stop_loss']}, "target": {long_levels['target']},
     "risk_reward": "1:{long_rr}", "confidence": 6,
-    "thesis": "2 sentences with specific fundamental data points.",
-    "catalyst": "Specific 6–12 month catalyst",
-    "key_risk": "Main risk to the long-term thesis"
+    "thesis": "2 sentences with specific fundamental data points (revenue growth %, margins, valuation ratios).",
+    "catalyst": "Specific 12-month catalyst",
+    "key_risk": "Main risk to the 12-month thesis"
   }},
   "discovery": {{
     "ticker": "{ticker}", "recommendation": "hold", "trade_type": "disruptor",
@@ -1555,8 +1537,7 @@ Respond ONLY with valid JSON, no markdown:
             "thesis": "Analysis unavailable — AI response could not be parsed.",
             "catalyst": "", "key_risk": "",
         }
-        return {"short": {**fallback, "trade_type": "momentum"},
-                "long": {**fallback, "trade_type": "growth"},
+        return {"long": {**fallback, "trade_type": "growth"},
                 "discovery": {**fallback, "trade_type": "disruptor"}}
 
     def _fix(result: Dict, levels_entry_low, levels_entry_high, levels_stop, levels_target) -> Dict:
@@ -1572,15 +1553,13 @@ Respond ONLY with valid JSON, no markdown:
         result["theoretical"] = _compute_theoretical(el, eh, stop, tgt, 1000)
         return result
 
-    short_r = _fix(parsed.get("short", {}),  short_levels["entry_low"], short_levels["entry_high"], short_levels["stop_loss"],  short_levels["target_2r"])
-    long_r  = _fix(parsed.get("long", {}),   long_levels["entry_low"],  long_levels["entry_high"],  long_levels["stop_loss"],  long_levels["target"])
-    disc_r  = _fix(parsed.get("discovery", {}), disc_levels["entry_low"], disc_levels["entry_high"], disc_levels["stop_loss"],  disc_levels["target"])
+    long_r = _fix(parsed.get("long", {}),        long_levels["entry_low"], long_levels["entry_high"], long_levels["stop_loss"], long_levels["target"])
+    disc_r = _fix(parsed.get("discovery", {}),   disc_levels["entry_low"], disc_levels["entry_high"], disc_levels["stop_loss"], disc_levels["target"])
 
-    short_r["next_trading_day"] = next_trading_day_label
-    long_r["next_trading_day"]  = "Long-term (6–12 months)"
-    disc_r["next_trading_day"]  = "10-Year Horizon"
+    long_r["next_trading_day"] = "Conviction Picks (12-month)"
+    disc_r["next_trading_day"] = "Discovery (10-year)"
 
-    return {"ticker": ticker, "short": short_r, "long": long_r, "discovery": disc_r}
+    return {"ticker": ticker, "long": long_r, "discovery": disc_r}
 
 
 # ─── Discovery single-ticker analysis ────────────────────────────────────────

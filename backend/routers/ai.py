@@ -103,10 +103,7 @@ async def _inner_generate_all_picks() -> dict:
     # Phase 1: market snapshot (cached 5 min, only 4 calls)
     market_data = await _build_market_snapshot()
 
-    # Phase 2a: short screener — batched Finnhub quotes (~1.5s)
-    screener_data = await run_screener(sort_by="score", limit=20)
-
-    # Phase 2b: pre-warm longterm + discovery caches in parallel (failures are non-fatal)
+    # Phase 2: pre-warm longterm + discovery caches in parallel (failures are non-fatal)
     await asyncio.gather(
         ai_service.screen_longterm_candidates(top_n=10),
         ai_service.screen_discovery_candidates(top_n=10),
@@ -119,15 +116,8 @@ async def _inner_generate_all_picks() -> dict:
             "bias": "neutral", "generated_at": date_str,
         }
 
-    # Phase 3: all 3 Claude calls in parallel — isolate failures per mode
+    # Phase 3: both Claude calls in parallel — isolate failures per mode
     p3_results = await asyncio.gather(
-        ai_service.generate_market_picks(
-            market_overview=market_data,
-            screener_results=screener_data,
-            date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode="short",
-        ),
         ai_service.generate_market_picks(
             market_overview=market_data,
             screener_results=[],
@@ -145,21 +135,17 @@ async def _inner_generate_all_picks() -> dict:
         return_exceptions=True,
     )
 
-    short_result = p3_results[0] if isinstance(p3_results[0], dict) else _error_result("short")
-    long_result  = p3_results[1] if isinstance(p3_results[1], dict) else _error_result("long")
-    disc_result  = p3_results[2] if isinstance(p3_results[2], dict) else _error_result("discovery")
+    long_result  = p3_results[0] if isinstance(p3_results[0], dict) else _error_result("long")
+    disc_result  = p3_results[1] if isinstance(p3_results[1], dict) else _error_result("discovery")
 
-    short_result["next_trading_day_label"] = next_trading_day_label
-    short_result["next_trading_day_date"] = next_trading_day_date
-    short_result["mode"] = "short"
-    long_result["next_trading_day_label"] = "Long-term (6–12 months)"
+    long_result["next_trading_day_label"] = "Conviction Picks (12-month)"
     long_result["next_trading_day_date"] = None
     long_result["mode"] = "long"
-    disc_result["next_trading_day_label"] = "10-Year Discovery Plays"
+    disc_result["next_trading_day_label"] = "Discovery (10-year)"
     disc_result["next_trading_day_date"] = None
     disc_result["mode"] = "discovery"
 
-    full = {"short": short_result, "long": long_result, "discovery": disc_result}
+    full = {"long": long_result, "discovery": disc_result}
 
     # Use short TTL if any mode failed to produce picks — don't lock in errors for 24h
     any_empty = any(len(v.get("picks", [])) == 0 for v in full.values())
@@ -304,7 +290,7 @@ async def get_ai_picks_status():
     has_picks = cached is not None
     generated_at = None
     if has_picks:
-        for mode in ("short", "long", "discovery"):
+        for mode in ("long", "discovery"):
             entry = (cached or {}).get(mode, {})
             if entry:
                 generated_at = entry.get("generated_at")
@@ -325,7 +311,7 @@ async def refresh_ai_picks():
     """
     delete_cached("ai_picks_all")
     delete_cached("ai_picks_all_full")
-    for mode in ("short", "long", "discovery"):
+    for mode in ("long", "discovery"):
         delete_cached(f"ai_picks_{mode}")
     asyncio.create_task(background_refresh_picks())
     return {"status": "refreshing", "message": "AI picks refresh started in background"}

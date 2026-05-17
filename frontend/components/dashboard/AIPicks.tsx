@@ -56,12 +56,12 @@ export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
 
 function TickerAnalysisCard({
   analysis,
-  mode = "short",
+  mode = "long",
   onSelect,
   onSimulate,
 }: {
   analysis: any;
-  mode?: "short" | "long" | "discovery";
+  mode?: "long" | "discovery";
   onSelect: () => void;
   onSimulate?: () => void;
 }) {
@@ -173,12 +173,12 @@ function TickerAnalysisCard({
 
 function PickCard({
   pick,
-  mode = "short",
+  mode = "long",
   onSelect,
   onSimulate,
 }: {
   pick: any;
-  mode?: "short" | "long" | "discovery";
+  mode?: "long" | "discovery";
   onSelect: () => void;
   onSimulate?: () => void;
 }) {
@@ -278,27 +278,19 @@ function PickCard({
 
 // ─── Investment calculator ────────────────────────────────────────────────────
 
-function holdEstimate(pct: number, mode: "short" | "long" | "discovery" = "short"): string {
+function holdEstimate(pct: number, mode: "long" | "discovery" = "long"): string {
   if (mode === "discovery") {
     if (pct < 50)  return "3–5 years";
     if (pct < 100) return "5–10 years";
     return "10+ years";
   }
-  if (mode === "long") {
-    if (pct < 5)  return "3–6 months";
-    if (pct < 15) return "6–12 months";
-    if (pct < 30) return "1–2 years";
-    return "2+ years";
-  }
-  if (pct < 1)  return "intraday";
-  if (pct < 2)  return "~1 session";
-  if (pct < 5)  return "1–3 days";
-  if (pct < 10) return "3–7 days";
-  if (pct < 20) return "1–2 weeks";
-  return "2+ weeks";
+  if (pct < 5)  return "3–6 months";
+  if (pct < 15) return "6–12 months";
+  if (pct < 30) return "1–2 years";
+  return "2+ years";
 }
 
-function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any; mode?: "short" | "long" | "discovery"; onSimulate?: () => void }) {
+function InvestmentCalculator({ pick, mode = "long", onSimulate }: { pick: any; mode?: "long" | "discovery"; onSimulate?: () => void }) {
   const [amount, setAmount] = useState("1000");
   const [profitGoal, setProfitGoal] = useState("5");
 
@@ -410,21 +402,11 @@ function InvestmentCalculator({ pick, mode = "short", onSimulate }: { pick: any;
   );
 }
 
-// ─── All mode — three panels, single fetch ───────────────────────────────────
-
-function nextTradingDayLabel(): string {
-  const now = new Date();
-  const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  if (day === 5) return "Monday's open"; // Friday → next Monday
-  if (day === 6) return "Monday's open"; // Saturday → Monday
-  if (day === 0) return "tomorrow's open"; // Sunday → Monday (tomorrow)
-  return "tomorrow's open";
-}
+// ─── All mode — two panels, single fetch ─────────────────────────────────────
 
 const ALL_MODE_CONFIGS = [
-  { mode: "short"     as const, label: "Day Trading",  accentCls: "text-cyan-400",   badgeCls: "border-cyan-800/40 text-cyan-400",    desc: `Short-term picks for ${nextTradingDayLabel()}` },
-  { mode: "long"      as const, label: "Long-Term",    accentCls: "text-purple-400", badgeCls: "border-purple-800/40 text-purple-400", desc: "6–12 month conviction plays" },
-  { mode: "discovery" as const, label: "Discovery",    accentCls: "text-amber-400",  badgeCls: "border-amber-800/40 text-amber-400",   desc: "10-year disruptors" },
+  { mode: "long"      as const, label: "Conviction Picks", accentCls: "text-purple-400", badgeCls: "border-purple-800/40 text-purple-400", desc: "12-month thesis" },
+  { mode: "discovery" as const, label: "Discovery",        accentCls: "text-amber-400",  badgeCls: "border-amber-800/40 text-amber-400",   desc: "10-year compounders" },
 ];
 
 function renderError(error: string) {
@@ -533,7 +515,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
     if (retrying[mode]) return;
     setRetrying((s) => ({ ...s, [mode]: true }));
     try {
-      const result = await api.aiPicks(mode as "short" | "long" | "discovery") as any;
+      const result = await api.aiPicks(mode as "long" | "discovery") as any;
       if (result?.picks?.length > 0) {
         setModeOverride((s) => ({ ...s, [mode]: result }));
       }
@@ -556,7 +538,7 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
           <div className="relative flex-1">
             <input
               type="text"
-              placeholder="Enter a ticker to get Short, Long & Discovery analysis"
+              placeholder="Enter a ticker for Conviction & Discovery analysis"
               value={tickerInput}
               onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
@@ -637,10 +619,10 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
-          <span className="text-sm font-semibold text-zinc-200">AI Picks — 3 Timeframes</span>
+          <span className="text-sm font-semibold text-zinc-200">AI Picks</span>
           {allData && !loading && (
             <span className="text-[10px] text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">
-              {allData.short?.generated_at ?? ""}
+              {allData.long?.generated_at ?? ""}
             </span>
           )}
         </div>
