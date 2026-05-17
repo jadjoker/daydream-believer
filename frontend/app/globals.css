@@ -26,6 +26,11 @@ body {
 .data-table td { padding: 9px 12px; border-bottom: 1px solid #18181b; font-size: 13px; }
 .data-table tbody tr:hover { background: #18181b; }
 
+/* Prevent iOS Safari auto-zoom on input focus (triggered when font-size < 16px) */
+@media (max-width: 768px) {
+  input, textarea, select { font-size: 16px !important; }
+}
+
 /* Pulse animation for live indicator */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
