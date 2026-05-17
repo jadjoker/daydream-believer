@@ -69,7 +69,6 @@ export default function SimulatorPanel({ ticker }: SimulatorPanelProps) {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-zinc-300">Paper Trading Simulator</span>
-            <Badge variant="info">Virtual</Badge>
           </div>
           <div className="flex items-center gap-2">
             <button

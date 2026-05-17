@@ -105,14 +105,6 @@ function TickerAnalysisCard({
           >
             $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
-          {onSimulate && (
-            <button
-              onClick={onSimulate}
-              className="flex items-center gap-1 text-xs bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2.5 py-1 rounded-lg transition-colors"
-            >
-              Simulate <ArrowRight size={11} />
-            </button>
-          )}
         </div>
       </div>
 
@@ -211,14 +203,6 @@ function PickCard({
           >
             $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
-          {onSimulate && (
-            <button
-              onClick={onSimulate}
-              className="flex items-center gap-1 text-xs bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2.5 py-1 rounded-lg transition-colors"
-            >
-              Simulate <ArrowRight size={11} />
-            </button>
-          )}
         </div>
       </div>
 
@@ -684,14 +668,6 @@ function AllModePicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: stri
                                 pick.confidence >= 8 ? "text-emerald-400" :
                                 pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
                               }`}>{pick.confidence}/10</span>
-                              {onSimulate && (
-                                <button
-                                  onClick={() => onSimulate(pick.ticker)}
-                                  className="text-[10px] bg-emerald-600/20 border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/30 px-2 py-0.5 rounded transition-colors"
-                                >
-                                  Sim
-                                </button>
-                              )}
                               <button
                                 onClick={() => {
                                   const next = isExpanded ? null : key;
