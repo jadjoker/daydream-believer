@@ -1322,38 +1322,38 @@ def _build_discovery_prompt(candidates: List[Dict], date_str: str, market_overvi
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
     time_note = _market_time_context(market_overview or {}, "the next session")
 
-    return f"""You are an expert venture-minded long-term investor. Today is {date_str}.{time_note}
+    return f"""You are an expert long-term investor focused on 10-year compounders. Today is {date_str}.{time_note}
 
-Your goal: identify companies that could be 10x in 10 years. All candidates have been pre-screened for platform economics potential — these are SaaS, marketplace, fintech, and deep-tech businesses only.
+Your goal: identify companies worth holding for 10 years — businesses that can compound returns through earnings growth, market expansion, and durable competitive advantages. These are higher-growth candidates pre-screened from the universe, but the core question is always: "Would a patient investor be meaningfully rewarded holding this through a full decade?"
 
 Business model lens (calibrate your thesis accordingly):
-- saas: evaluate ARR growth rate, net revenue retention >120%, gross margin >70% as the gold standard
-- platform: evaluate network effect moat, user growth compounding, take-rate expansion potential
-- fintech: evaluate payment volume trajectory, underbanked market penetration, regulatory defensibility
-- deeptech: evaluate technology differentiation, patent moat, credible path from R&D to dominant revenue
+- saas: ARR growth rate, net revenue retention >120%, gross margin expansion — recurring revenue flywheel
+- platform: network effect durability, user growth trajectory, take-rate expansion over time
+- fintech: payment volume compounding, margin expansion as scale grows, regulatory positioning
+- deeptech: technology differentiation depth, path from R&D to dominant revenue, patent moat longevity
 
 TICKER IDENTITY — memorize before writing any thesis:
 {ticker_map}
 Every pick's thesis must reference ONLY the company matched to that ticker above.
 Do NOT confuse similar-looking tickers.
 
-=== CANDIDATES (pre-screened for disruption potential, ranked by platform economics score) ===
+=== CANDIDATES (pre-screened for long-term growth potential, ranked by fundamentals score) ===
 {candidates_block}
 
 === YOUR JOB ===
-1. Select 6–8 of the best candidates (fewer is better — only include genuine 10-year conviction plays)
-2. Set price targets reflecting YOUR conviction — the 2.5x base is a floor, not a ceiling:
-   - confidence ≥ 8 with clear platform dominance path → target 5x–10x
-   - confidence 6–7 with strong but contested position → target 3x–5x
+1. Select 6–8 of the best candidates for a 10-year hold — fewer is fine, never force weak picks
+2. Set price targets reflecting realistic 10-year compounding:
+   - confidence ≥ 8 with strong growth and durable advantages → target 4x–8x
+   - confidence 6–7 with solid but uncertain position → target 2.5x–4x
    - confidence < 6 → do not include
 3. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (e.g. "Revenue growing at 38% YoY", "Gross margin of 76%" — not vague phrases like "strong growth potential")
-4. Name one specific catalyst that could accelerate the 10-year thesis (product expansion, market share inflection, regulatory win)
-5. Name one key risk that could permanently impair the thesis — not just volatility (e.g. competitive displacement, regulation, commoditization)
+4. Name one specific catalyst that could accelerate the long-term thesis
+5. Name one key structural risk that could permanently impair the thesis
 
 RULES:
-- trade_type must be one of: disruptor (redefining an industry), platform (marketplace/network effects), deep-tech (proprietary technology moat), speculative (high risk/reward early stage)
-- Stop losses must stay wide (30–40%) — these positions are held through volatility, not day-traded
-- market_summary must address whether current macro conditions favor accumulating 10-year growth positions
+- trade_type must be one of: compounder (durable earnings growth), disruptor (redefining an industry), platform (network effects), deep-tech (proprietary technology moat), speculative (high risk/reward)
+- Stop losses must stay wide (30–40%) — these positions are held through volatility
+- market_summary must address whether macro conditions favor accumulating long-term positions now
 - Do NOT reference RSI, MACD, VWAP, or any short-term technical signals
 - CRITICAL: thesis for ticker X must ONLY describe the company named for X in TICKER IDENTITY above
 
@@ -1472,10 +1472,23 @@ async def analyze_ticker_all_modes(
     model_context = ""
     if model:
         discovery_eligible = model in _DISCOVERY_ELIGIBLE
+        disc_lens = {
+            "mega":       "dominant incumbents — evaluate whether they can sustain compounding at scale and defend market share",
+            "saas":       "recurring revenue flywheel — evaluate ARR growth, net revenue retention >120%, and gross margin expansion",
+            "platform":   "network-effect compounders — evaluate user growth trajectory, take-rate expansion, and moat defensibility",
+            "fintech":    "financial infrastructure — evaluate payment volume growth, margin expansion, and regulatory positioning",
+            "deeptech":   "technology-moat plays — evaluate R&D differentiation, patent depth, and path from lab to dominant revenue",
+            "healthcare": "innovation + durability — evaluate pipeline, patent runway, and pricing power",
+            "consumer":   "brand compounders — evaluate unit economics, same-store sales growth, geographic expansion runway, and pricing power over 10 years",
+            "financial":  "capital allocators — evaluate ROE consistency, dividend growth, and ability to compound book value",
+            "industrial": "durable cash flow generators — evaluate cycle positioning, capital discipline, and long-term demand tailwinds",
+            "energy":     "commodity exposure + capital return — evaluate reserve life, dividend sustainability, and energy transition positioning",
+        }.get(model, "evaluate long-term compounding potential appropriate to this business type")
         model_context = f"""
 BUSINESS MODEL: {model}
-- Conviction (12-month): {'focus on ARR/revenue growth rate, gross margins, and platform moat' if model in ('saas','platform') else 'focus on fundamentals appropriate to this business type'}
-- Discovery (10-year): {'this business has genuine platform economics — evaluate network effects, TAM, and growth compounding' if discovery_eligible else f'NOTE: {model} businesses rarely have the platform moat required for 10x in 10 years — be honest about structural limitations'}"""
+- Conviction (12-month): focus on near-term fundamentals, valuation, and catalyst pipeline
+- Discovery (10-year): {disc_lens}
+  Ask: Could this business be meaningfully larger and more profitable in 10 years? Would a patient long-term investor be well-rewarded holding through cycles?"""
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
     change_label = "last close" if market_overview.get("market_status") in ("closed", "pre-market") else "today"
@@ -1492,13 +1505,15 @@ BUY if fundamentals are strong and valuation reasonable. HOLD if good but expens
 
 ━━━ HORIZON 2: DISCOVERY (10-year compounder) ━━━
 Entry: ${disc_levels['entry_low']:.2f}–${disc_levels['entry_high']:.2f} | Stop: ${disc_levels['stop_loss']:.2f} | Target: ${disc_levels['target']:.2f} (2.5x base) | R/R 1:{disc_rr}
-BUY only if this company could genuinely dominate its market in 10 years. HOLD if interesting but unclear. AVOID if no defensible platform moat or declining growth.
+The question is NOT "is this a tech disruptor?" — it is: "Would a patient investor be well-rewarded holding this for 10 years?"
+BUY if the business has durable competitive advantages and can compound earnings over a decade.
+HOLD if the business is sound but current valuation or growth trajectory leaves the 10-year return uncertain.
+AVOID only if the business has structural decline risk, no pricing power, or a broken model — not merely because it lacks "platform moat".
 
 THESIS RULES — apply to BOTH horizons:
 - Every thesis sentence must cite at least one specific number from the data above
 - Conviction thesis: cite fundamental metrics (revenue growth %, margins, valuation ratios)
-- Discovery thesis: cite growth rate + explain the specific moat (network effects, switching costs, data advantage)
-- For discovery, if the business model note says this is not a platform-economics business, be direct — AVOID with a clear explanation
+- Discovery thesis: cite the key compounding driver (market expansion, unit economics, brand durability, earnings growth trajectory) with specific numbers
 
 Respond ONLY with valid JSON, no markdown:
 {{
@@ -1604,14 +1619,21 @@ async def _analyze_ticker_discovery(ticker: str) -> Dict:
     ] if x]
     fund_str = "\n".join(fund_lines) if fund_lines else "Fundamental data not available."
 
-    discovery_eligible = model in _DISCOVERY_ELIGIBLE
-    model_note = (
-        f"Business model: {model} — this is a platform-economics business. Evaluate network effects, TAM, and growth compounding."
-        if discovery_eligible else
-        f"Business model: {model} — NOTE: this business type has physical-expansion or commodity constraints that structurally limit 10x potential. Be direct about whether a genuine 10-year disruption thesis exists."
-    ) if model else ""
+    disc_lenses = {
+        "mega":       "dominant incumbent — can it sustain compounding at scale and defend market share over a decade?",
+        "saas":       "recurring revenue flywheel — ARR growth, net revenue retention, and gross margin expansion are key",
+        "platform":   "network-effect compounder — user growth trajectory, take-rate expansion, and moat defensibility",
+        "fintech":    "financial infrastructure — payment volume, margin expansion, and regulatory positioning",
+        "deeptech":   "technology-moat play — R&D differentiation, patent depth, and path to dominant revenue",
+        "healthcare": "innovation durability — pipeline, patent runway, and pricing power",
+        "consumer":   "brand compounder — unit economics durability, same-store sales growth, geographic expansion runway, and pricing power over a decade",
+        "financial":  "capital allocator — ROE consistency, dividend growth, and ability to compound book value",
+        "industrial": "durable cash flow — cycle positioning, capital discipline, and long-term demand tailwinds",
+        "energy":     "commodity + capital return — reserve life, dividend sustainability, and energy transition positioning",
+    }
+    model_note = f"Business model: {model} — {disc_lenses.get(model, 'evaluate long-term compounding potential')}" if model else ""
 
-    prompt = f"""You are an expert venture-minded long-term investor. Evaluate {ticker} ({name}) as a potential 10-year disruptive hold.
+    prompt = f"""You are an expert long-term investor evaluating 10-year holds. Evaluate {ticker} ({name}) for a patient, long-horizon investor.
 
 Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}
 {model_note}
@@ -1619,16 +1641,20 @@ Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}
 GROWTH METRICS:
 {fund_str}
 
-Assess whether this company could be 10x from here in 10 years. Consider:
-1. What market is this company disrupting and how large is the TAM?
-2. Does revenue growth rate suggest they are winning market share?
-3. Is there a defensible moat (network effects, switching costs, data advantage, regulatory barrier)?
-4. Is there a credible path to dominant profitability even if currently unprofitable?
+The key question is NOT "is this a tech disruptor?" — it is: "Would a patient investor be well-rewarded holding this for 10 years?"
+Consider:
+1. Does this business have durable competitive advantages (brand, scale, switching costs, network effects, regulatory moat)?
+2. Can it grow its earnings or revenue meaningfully over the next decade?
+3. Is the market it operates in expanding, and does it have room to take more share?
+4. Would it survive and thrive through at least one full economic cycle?
 
-Decide: BUY (compelling 10-year disruptive thesis), HOLD (interesting but needs more evidence), or AVOID (thesis is weak or no platform moat)
+Decide:
+- BUY: durable business, clear compounding path, attractive enough entry
+- HOLD: sound business but current valuation or growth trajectory makes the 10-year return uncertain
+- AVOID: structural decline risk, loss of pricing power, broken economics, or a fundamentally commoditized model — NOT merely because it lacks "platform moat"
 
 Suggested entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} (~35% wide) | 10-year base target: ${target:.2f} (2.5x)
-For high conviction (confidence ≥ 8) with clear platform dominance: adjust target to 5x–10x.
+For high conviction (confidence ≥ 8): adjust target to 4x–8x if earnings compounding supports it.
 
 Each thesis sentence must cite at least one specific numeric value. Do NOT reference RSI, MACD, or short-term technicals.
 
