@@ -560,7 +560,7 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
         reward = round(target - entry, 2)
         rr = f"1:{reward/risk:.1f}" if risk > 0 else "—"
 
-        cleaned.append({
+        pick = {
             "rank": i + 1,
             "ticker": p.get("ticker", ""),
             "trade_type": p.get("trade_type", c.get("trade_type", "momentum")),
@@ -573,7 +573,11 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
             "thesis": p.get("thesis", ""),
             "catalyst": p.get("catalyst", ""),
             "key_risk": p.get("key_risk", ""),
-        })
+        }
+        # Preserve hold_horizon for unified mode picks
+        if p.get("hold_horizon"):
+            pick["hold_horizon"] = p["hold_horizon"]
+        cleaned.append(pick)
     return cleaned
 
 
@@ -622,7 +626,16 @@ async def generate_market_picks(
 ) -> Dict:
     regime = assess_market_regime(market_overview)
 
-    if mode == "long":
+    if mode == "unified":
+        try:
+            candidates = await screen_longterm_candidates(top_n=12)
+        except Exception:
+            candidates = []
+        if not candidates:
+            return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
+                    "bias": "neutral", "generated_at": date_str}
+        prompt = _build_unified_prompt(candidates, market_overview, date_str)
+    elif mode == "long":
         try:
             candidates = await screen_longterm_candidates(top_n=10)
         except Exception:
@@ -648,7 +661,7 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    tokens = 2800 if mode in ("long", "discovery") else 1800
+    tokens = 3200 if mode in ("long", "discovery", "unified") else 1800
 
     for attempt in range(2):
         raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
@@ -1381,6 +1394,94 @@ Respond ONLY with valid JSON, no markdown:
 }}"""
 
 
+# ─── Unified prompt builder ──────────────────────────────────────────────────
+
+def _build_unified_prompt(
+    candidates: List[Dict],
+    market_overview: Dict,
+    date_str: str,
+) -> str:
+    rows = []
+    for i, c in enumerate(candidates, 1):
+        model_label = c.get("business_model", "")
+        rows.append(
+            f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
+            f"   Fundamentals: {c['fund_summary']}\n"
+            f"   Score: {c['score']:.1f}"
+        )
+    candidates_block = "\n".join(rows)
+    spy_c = market_overview.get("spy_change_pct", 0)
+    vix = market_overview.get("vix") or 20
+    ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
+    time_note = _market_time_context(market_overview, "the next session")
+
+    return f"""You are an expert long-term investor. Today is {date_str}.{time_note}
+
+Your goal: identify the best stocks to hold long-term and assign each an appropriate hold horizon based on business quality, growth stage, and compounding potential.
+
+HOLD HORIZONS — assign the most appropriate one per pick:
+- "1-3yr": near-term catalysts, valuation gap closing, current business momentum. Entry ±3%, Stop 10-15% below, Target 20-50% upside
+- "3-5yr": proven compounders with durable growth and expanding moat. Entry ±3%, Stop 15-25% below, Target 50-120% upside
+- "5-10yr": decade-long compounders or disruptors with wide moats and massive TAM. Entry ±5%, Stop 30-40% below, Target 150-400% upside
+
+BUSINESS MODEL LENSES (calibrate your thesis accordingly):
+- mega: reasonable valuation + market dominance; usually "1-3yr" or "3-5yr"
+- saas: ARR growth, net revenue retention, gross margin expansion → "3-5yr" or "5-10yr"
+- platform: network effect durability, user growth trajectory → often "5-10yr" if moat is wide
+- fintech: payment volume growth, margin expansion → "3-5yr" or "5-10yr"
+- deeptech: R&D differentiation, path to dominance → usually "5-10yr"
+- healthcare: pipeline, patent runway, pricing power → "3-5yr" or "5-10yr"
+- consumer: brand durability, unit economics, pricing power → typically "3-5yr"
+- financial: ROE consistency, dividend growth → "1-3yr" or "3-5yr"
+- industrial/energy: cycle positioning, capital return → "1-3yr" or "3-5yr"
+
+TICKER IDENTITY — memorize before writing any thesis:
+{ticker_map}
+Every pick's thesis must reference ONLY the company matched to that ticker above.
+
+=== MACRO CONTEXT ===
+SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
+
+=== CANDIDATES (ranked by fundamental score) ===
+{candidates_block}
+
+=== YOUR JOB ===
+1. Select 7–10 of the best candidates — spread across at least 2 different hold_horizon values
+2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
+3. Set price levels matching the horizon (see ranges above). Stop must be BELOW entry.
+4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
+5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (revenue growth %, margins, ratios).
+6. Confidence ≥ 8: strong fundamentals + clear compounding path. Do not include picks with confidence < 6.
+
+RULES:
+- market_summary must reference VIX {vix:.1f} and macro conditions for long-term position building
+- CRITICAL: thesis for ticker X must ONLY describe the company named for X in TICKER IDENTITY above
+
+Respond ONLY with valid JSON, no markdown:
+{{
+  "market_summary": "2 sentences on macro backdrop and whether conditions favor accumulating long-term positions",
+  "bias": "bullish",
+  "picks": [
+    {{
+      "rank": 1,
+      "ticker": "MSFT",
+      "hold_horizon": "3-5yr",
+      "trade_type": "compounder",
+      "entry_low": 420.00,
+      "entry_high": 432.00,
+      "stop_loss": 340.00,
+      "target": 680.00,
+      "risk_reward": "1:2.8",
+      "confidence": 8,
+      "thesis": "Azure cloud revenue grew 31% YoY, accelerating for the third consecutive quarter on AI workload adoption. Forward P/E of 34x sits below the 3-year average of 38x despite a structurally higher earnings trajectory from Copilot monetization.",
+      "catalyst": "Copilot enterprise seat expansion or Azure market share gains announced at next earnings",
+      "key_risk": "Margin compression if AI infrastructure capex outpaces Azure revenue growth in next 2–3 years"
+    }}
+  ],
+  "generated_at": "{date_str}"
+}}"""
+
+
 # ─── Combined all-modes single-ticker analysis ───────────────────────────────
 
 async def analyze_ticker_all_modes(
@@ -1409,48 +1510,43 @@ async def analyze_ticker_all_modes(
     name = quote_data.get("name") or fh_data.get("name") or ticker
     change_pct_atm = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
     sector = quote_data.get("sector") or fh_data.get("sector") or ""
-
-    # Look up business model tag — informs horizon-specific guidance
     model = EQUITY_MODEL.get(ticker.upper(), "")
 
     if not price:
         err = {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
-        return {"long": err, "discovery": err}
+        return {"ticker": ticker, "unified": err}
 
     regime = assess_market_regime(market_overview)
 
+    # Default levels for each horizon (Claude will refine these)
     ema50 = ta_data.get("ema_50")
-    long_stop = round(ema50 * 0.97, 2) if ema50 and ema50 < price * 0.92 else round(price * 0.85, 2)
-    long_levels = {
+    h1_stop = round(ema50 * 0.97, 2) if ema50 and ema50 < price * 0.90 else round(price * 0.87, 2)
+    h1_levels = {  # 1-3yr
         "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.03, 2),
-        "stop_loss": long_stop, "target": round(price * 1.25, 2),
+        "stop_loss": h1_stop, "target": round(price * 1.30, 2),
     }
-    long_rr = round((long_levels["target"] - price) / max(price - long_levels["stop_loss"], 0.01), 1)
-
-    disc_levels = {
+    h2_levels = {  # 3-5yr
+        "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.03, 2),
+        "stop_loss": round(price * 0.80, 2), "target": round(price * 1.75, 2),
+    }
+    h3_levels = {  # 5-10yr
         "entry_low": round(price * 0.95, 2), "entry_high": round(price * 1.05, 2),
-        "stop_loss": round(price * 0.65, 2), "target": round(price * 2.50, 2),
+        "stop_loss": round(price * 0.65, 2), "target": round(price * 3.00, 2),
     }
-    disc_rr = round((disc_levels["target"] - price) / max(price - disc_levels["stop_loss"], 0.01), 1)
 
     signals = []
     if ta_data:
         rsi = ta_data.get("rsi_14")
         macd_hist = ta_data.get("macd_hist")
         ema9 = ta_data.get("ema_9"); ema21 = ta_data.get("ema_21")
-        adx = ta_data.get("adx"); vwap = ta_data.get("vwap"); stoch_k = ta_data.get("stoch_k")
+        adx = ta_data.get("adx"); stoch_k = ta_data.get("stoch_k")
         if rsi: signals.append(f"RSI {rsi:.0f}{'(oversold)' if rsi < 30 else '(overbought)' if rsi > 70 else ''}")
         if macd_hist is not None: signals.append(f"MACD {'▲' if macd_hist > 0 else '▼'}{abs(macd_hist):.3f}")
         if ema9 and ema21: signals.append(f"EMA9{'>' if ema9 > ema21 else '<'}EMA21")
         if adx: signals.append(f"ADX {adx:.0f}")
-        if vwap and price: signals.append(f"{'above' if price > vwap else 'below'} VWAP")
         if stoch_k: signals.append(f"Stoch {stoch_k:.0f}")
     else:
         signals.append(f"Day change: {change_pct_atm:+.1f}%")
-        h = fh_data.get("high") or 0
-        l = fh_data.get("low") or 0
-        if h and l and price and h != l:
-            signals.append(f"At {(price - l) / (h - l) * 100:.0f}% of day range")
         if change_pct_atm > 3: signals.append("Strong bullish momentum")
         elif change_pct_atm > 1: signals.append("Mild bullish")
         elif change_pct_atm < -3: signals.append("Strong selling pressure")
@@ -1465,114 +1561,104 @@ async def analyze_ticker_all_modes(
         _pct(fund_data.get("roe"), "ROE"),
         f"D/E: {fund_data['debt_to_equity']:.0f}" if fund_data.get("debt_to_equity") is not None else None,
         f"FCF: ${fund_data['free_cashflow']/1e9:.1f}B" if fund_data.get("free_cashflow") else None,
+        f"Div: {fund_data['dividend_yield']*100:.1f}%" if fund_data.get("dividend_yield") else None,
     ] if x]
     fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data limited"
 
-    # Business model context — guides Claude to give horizon-appropriate recommendations
-    model_context = ""
-    if model:
-        discovery_eligible = model in _DISCOVERY_ELIGIBLE
-        disc_lens = {
-            "mega":       "dominant incumbents — evaluate whether they can sustain compounding at scale and defend market share",
-            "saas":       "recurring revenue flywheel — evaluate ARR growth, net revenue retention >120%, and gross margin expansion",
-            "platform":   "network-effect compounders — evaluate user growth trajectory, take-rate expansion, and moat defensibility",
-            "fintech":    "financial infrastructure — evaluate payment volume growth, margin expansion, and regulatory positioning",
-            "deeptech":   "technology-moat plays — evaluate R&D differentiation, patent depth, and path from lab to dominant revenue",
-            "healthcare": "innovation + durability — evaluate pipeline, patent runway, and pricing power",
-            "consumer":   "brand compounders — evaluate unit economics, same-store sales growth, geographic expansion runway, and pricing power over 10 years",
-            "financial":  "capital allocators — evaluate ROE consistency, dividend growth, and ability to compound book value",
-            "industrial": "durable cash flow generators — evaluate cycle positioning, capital discipline, and long-term demand tailwinds",
-            "energy":     "commodity exposure + capital return — evaluate reserve life, dividend sustainability, and energy transition positioning",
-        }.get(model, "evaluate long-term compounding potential appropriate to this business type")
-        model_context = f"""
-BUSINESS MODEL: {model}
-- Conviction (12-month): focus on near-term fundamentals, valuation, and catalyst pipeline
-- Discovery (10-year): {disc_lens}
-  Ask: Could this business be meaningfully larger and more profitable in 10 years? Would a patient long-term investor be well-rewarded holding through cycles?"""
+    model_lens = {
+        "mega":       "dominant incumbent — value vs moat sustainability; usually 1-3yr or 3-5yr",
+        "saas":       "recurring revenue flywheel — ARR growth, NRR >120%, gross margin expansion; often 3-5yr or 5-10yr",
+        "platform":   "network-effect compounder — user growth, take-rate expansion; often 5-10yr",
+        "fintech":    "financial infrastructure — payment volume growth, margin expansion; 3-5yr or 5-10yr",
+        "deeptech":   "technology moat — R&D differentiation, path to dominant revenue; usually 5-10yr",
+        "healthcare": "innovation durability — pipeline, patent runway, pricing power; 3-5yr or 5-10yr",
+        "consumer":   "brand compounder — unit economics, same-store sales, pricing power; typically 3-5yr",
+        "financial":  "capital allocator — ROE consistency, dividend growth; 1-3yr or 3-5yr",
+        "industrial": "durable cash flow — cycle positioning, capital discipline; 1-3yr or 3-5yr",
+        "energy":     "commodity + capital return — reserve life, dividend sustainability; 1-3yr or 3-5yr",
+    }.get(model, "evaluate long-term compounding potential")
+    model_context = f"\nBUSINESS MODEL: {model} — {model_lens}" if model else ""
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
-    change_label = "last close" if market_overview.get("market_status") in ("closed", "pre-market") else "today"
 
-    prompt = f"""You are a multi-timeframe expert analyst. Analyze {ticker} ({name}) across 2 investment horizons simultaneously.{time_note}
-STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
-TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'} | Summary: {ta_data.get('signal_summary') or (f'Price action: {change_pct_atm:+.1f}% ({change_label})' if change_pct_atm else 'Price action analysis')}
+    prompt = f"""You are a long-term investment expert. Analyze {ticker} ({name}) and assign it ONE best-fit hold horizon.{time_note}
+
+STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}{model_context}
+TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'}
 FUNDAMENTALS: {fund_str}
-MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} — {regime['vix_regime']}{model_context}
+MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']}
 
-━━━ HORIZON 1: CONVICTION PICKS (12-month thesis) ━━━
-Entry: ${long_levels['entry_low']:.2f}–${long_levels['entry_high']:.2f} | Stop: ${long_levels['stop_loss']:.2f} | Target: ${long_levels['target']:.2f} | R/R 1:{long_rr}
-BUY if fundamentals are strong and valuation reasonable. HOLD if good but expensive. AVOID if declining metrics.
+HOLD HORIZONS — choose the single best fit:
+- "1-3yr": near-term catalysts, valuation gap. Entry ±3%, Stop 10-15%, Target 20-50% upside. (Default levels: Entry ${h1_levels['entry_low']:.2f}–${h1_levels['entry_high']:.2f}, Stop ${h1_levels['stop_loss']:.2f}, Target ${h1_levels['target']:.2f})
+- "3-5yr": proven compounder, durable growth. Entry ±3%, Stop 15-25%, Target 50-120% upside. (Default: Entry ${h2_levels['entry_low']:.2f}–${h2_levels['entry_high']:.2f}, Stop ${h2_levels['stop_loss']:.2f}, Target ${h2_levels['target']:.2f})
+- "5-10yr": decade-long compounder/disruptor. Entry ±5%, Stop 30-40%, Target 150-400%. (Default: Entry ${h3_levels['entry_low']:.2f}–${h3_levels['entry_high']:.2f}, Stop ${h3_levels['stop_loss']:.2f}, Target ${h3_levels['target']:.2f})
 
-━━━ HORIZON 2: DISCOVERY (10-year compounder) ━━━
-Entry: ${disc_levels['entry_low']:.2f}–${disc_levels['entry_high']:.2f} | Stop: ${disc_levels['stop_loss']:.2f} | Target: ${disc_levels['target']:.2f} (2.5x base) | R/R 1:{disc_rr}
-The question is NOT "is this a tech disruptor?" — it is: "Would a patient investor be well-rewarded holding this for 10 years?"
-BUY if the business has durable competitive advantages and can compound earnings over a decade.
-HOLD if the business is sound but current valuation or growth trajectory leaves the 10-year return uncertain.
-AVOID only if the business has structural decline risk, no pricing power, or a broken model — not merely because it lacks "platform moat".
+DECISION:
+- BUY: durable business, clear compounding path, attractive entry
+- HOLD: sound business but expensive or uncertain growth trajectory
+- AVOID: structural decline, broken economics, no pricing power — NOT merely because it lacks a platform moat
 
-THESIS RULES — apply to BOTH horizons:
-- Every thesis sentence must cite at least one specific number from the data above
-- Conviction thesis: cite fundamental metrics (revenue growth %, margins, valuation ratios)
-- Discovery thesis: cite the key compounding driver (market expansion, unit economics, brand durability, earnings growth trajectory) with specific numbers
+trade_type must be: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
+Each thesis sentence must cite at least one specific numeric value. Do NOT reference RSI, MACD, or VWAP.
 
 Respond ONLY with valid JSON, no markdown:
 {{
-  "long": {{
-    "ticker": "{ticker}", "recommendation": "hold", "trade_type": "growth",
-    "entry_low": {long_levels['entry_low']}, "entry_high": {long_levels['entry_high']},
-    "stop_loss": {long_levels['stop_loss']}, "target": {long_levels['target']},
-    "risk_reward": "1:{long_rr}", "confidence": 6,
-    "thesis": "2 sentences with specific fundamental data points (revenue growth %, margins, valuation ratios).",
-    "catalyst": "Specific 12-month catalyst",
-    "key_risk": "Main risk to the 12-month thesis"
-  }},
-  "discovery": {{
-    "ticker": "{ticker}", "recommendation": "hold", "trade_type": "disruptor",
-    "entry_low": {disc_levels['entry_low']}, "entry_high": {disc_levels['entry_high']},
-    "stop_loss": {disc_levels['stop_loss']}, "target": {disc_levels['target']},
-    "risk_reward": "1:{disc_rr}", "confidence": 6,
-    "thesis": "2 sentences on 10-year disruption potential with specific metrics, or honest AVOID reasoning if no platform moat.",
-    "catalyst": "Specific 10-year thesis accelerant",
-    "key_risk": "Structural risk that could permanently impair the 10-year thesis"
-  }}
+  "ticker": "{ticker}",
+  "hold_horizon": "3-5yr",
+  "recommendation": "buy",
+  "trade_type": "compounder",
+  "entry_low": {h2_levels['entry_low']},
+  "entry_high": {h2_levels['entry_high']},
+  "stop_loss": {h2_levels['stop_loss']},
+  "target": {h2_levels['target']},
+  "risk_reward": "1:2.5",
+  "confidence": 7,
+  "thesis": "2 sentences with specific numeric data supporting the hold horizon and recommendation.",
+  "catalyst": "Specific event or development that could accelerate the thesis",
+  "key_risk": "Main risk that could permanently impair the thesis"
 }}"""
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=2400))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1600))
 
     try:
         parsed = _parse_response(raw)
     except json.JSONDecodeError:
-        fallback = {
-            "ticker": ticker, "recommendation": "hold", "trade_type": "unknown",
-            "entry_low": 0, "entry_high": 0, "stop_loss": 0, "target": 0,
-            "risk_reward": "—", "confidence": 5,
-            "thesis": "Analysis unavailable — AI response could not be parsed.",
-            "catalyst": "", "key_risk": "",
-        }
-        return {"long": {**fallback, "trade_type": "growth"},
-                "discovery": {**fallback, "trade_type": "disruptor"}}
+        parsed = {}
 
-    def _fix(result: Dict, levels_entry_low, levels_entry_high, levels_stop, levels_target) -> Dict:
-        el = result.get("entry_low", levels_entry_low)
-        eh = result.get("entry_high", levels_entry_high)
-        stop = result.get("stop_loss", levels_stop)
-        tgt = result.get("target", levels_target)
-        mid = (el + eh) / 2
-        if stop >= mid: stop = levels_stop
-        if tgt <= mid: tgt = levels_target
-        result["stop_loss"] = round(stop, 2)
-        result["target"] = round(tgt, 2)
-        result["theoretical"] = _compute_theoretical(el, eh, stop, tgt, 1000)
-        return result
+    # Pick default levels based on assigned horizon
+    hz = parsed.get("hold_horizon", "3-5yr")
+    default_levels = h1_levels if hz == "1-3yr" else (h3_levels if hz == "5-10yr" else h2_levels)
 
-    long_r = _fix(parsed.get("long", {}),        long_levels["entry_low"], long_levels["entry_high"], long_levels["stop_loss"], long_levels["target"])
-    disc_r = _fix(parsed.get("discovery", {}),   disc_levels["entry_low"], disc_levels["entry_high"], disc_levels["stop_loss"], disc_levels["target"])
+    el = parsed.get("entry_low", default_levels["entry_low"])
+    eh = parsed.get("entry_high", default_levels["entry_high"])
+    stop = parsed.get("stop_loss", default_levels["stop_loss"])
+    tgt = parsed.get("target", default_levels["target"])
+    mid = (el + eh) / 2
+    if stop >= mid: stop = default_levels["stop_loss"]
+    if tgt <= mid: tgt = default_levels["target"]
+    risk = round(mid - stop, 2)
+    reward = round(tgt - mid, 2)
+    rr = f"1:{reward/risk:.1f}" if risk > 0 else "—"
 
-    long_r["next_trading_day"] = "Conviction Picks (12-month)"
-    disc_r["next_trading_day"] = "Discovery (10-year)"
+    unified = {
+        "ticker": ticker,
+        "hold_horizon": hz,
+        "recommendation": parsed.get("recommendation", "hold"),
+        "trade_type": parsed.get("trade_type", "compounder"),
+        "entry_low": round(el, 2),
+        "entry_high": round(eh, 2),
+        "stop_loss": round(stop, 2),
+        "target": round(tgt, 2),
+        "risk_reward": parsed.get("risk_reward") or rr,
+        "confidence": max(1, min(10, int(parsed.get("confidence", 5)))),
+        "thesis": parsed.get("thesis", "Analysis unavailable — AI response could not be parsed."),
+        "catalyst": parsed.get("catalyst", ""),
+        "key_risk": parsed.get("key_risk", ""),
+        "theoretical": _compute_theoretical(el, eh, stop, tgt, 1000),
+    }
 
-    return {"ticker": ticker, "long": long_r, "discovery": disc_r}
+    return {"ticker": ticker, "unified": unified}
 
 
 # ─── Discovery single-ticker analysis ────────────────────────────────────────
