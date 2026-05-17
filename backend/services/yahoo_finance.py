@@ -35,8 +35,23 @@ async def get_quote(ticker: str) -> Optional[Dict]:
     # Use Finnhub as primary source when key is available — avoids Yahoo Finance rate limits
     if os.getenv("FINNHUB_API_KEY"):
         from services import finnhub_service
-        fh = await finnhub_service.get_quote(ticker)
-        if fh and fh.get("price"):
+        # Parallel: real-time quote + basic fundamentals (52-wk, mkt cap, PE, dividend)
+        fh, bfin = await asyncio.gather(
+            finnhub_service.get_quote(ticker),
+            finnhub_service.get_basic_financials(ticker),
+            return_exceptions=True,
+        )
+        if isinstance(fh, dict) and fh.get("price"):
+            if isinstance(bfin, dict):
+                m = bfin.get("metric") or {}
+                fh["week_52_high"] = m.get("52WeekHigh")
+                fh["week_52_low"]  = m.get("52WeekLow")
+                mc = m.get("marketCapitalization")
+                fh["market_cap"]   = int(mc * 1_000_000) if mc else None
+                fh["pe_ratio"]     = m.get("peBasicExclExtraTTM") or m.get("peNormalizedAnnual")
+                div_y = m.get("dividendYieldIndicatedAnnual")
+                fh["dividend_yield"] = div_y / 100 if div_y is not None else None
+                fh["dividend_rate"]  = m.get("dividendPerShareAnnual")
             return fh
 
     def _fetch():
