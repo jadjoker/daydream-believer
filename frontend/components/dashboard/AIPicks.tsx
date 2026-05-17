@@ -129,8 +129,8 @@ function TickerAnalysisCard({
         </div>
       </div>
 
-      {/* Thesis — kept exactly as-is */}
-      <div className="px-4 py-3 bg-zinc-900/40">
+      {/* Thesis */}
+      <div className="px-4 pt-3 pb-2 bg-zinc-900/40">
         <p className="text-sm text-zinc-400 leading-relaxed">{analysis.thesis}</p>
         <p className="text-[10px] text-zinc-600 italic mt-2">
           {mode === "discovery"
@@ -142,6 +142,24 @@ function TickerAnalysisCard({
                 : "Not financial advice"}
         </p>
       </div>
+
+      {/* Catalyst & Key Risk */}
+      {(analysis.catalyst || analysis.key_risk) && (
+        <div className="px-4 pb-3 bg-zinc-900/40 space-y-1">
+          {analysis.catalyst && (
+            <div className="flex items-start gap-1.5">
+              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.catalyst}</p>
+            </div>
+          )}
+          {analysis.key_risk && (
+            <div className="flex items-start gap-1.5">
+              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.key_risk}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Return estimator — same as pick cards */}
       {calcOpen && (
@@ -228,9 +246,27 @@ function PickCard({
       </div>
 
       {/* Thesis */}
-      <div className="px-4 py-3">
+      <div className="px-4 pt-3 pb-2">
         <p className="text-sm text-zinc-400 leading-relaxed">{pick.thesis}</p>
       </div>
+
+      {/* Catalyst & Key Risk */}
+      {(pick.catalyst || pick.key_risk) && (
+        <div className="px-4 pb-3 space-y-1">
+          {pick.catalyst && (
+            <div className="flex items-start gap-1.5">
+              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{pick.catalyst}</p>
+            </div>
+          )}
+          {pick.key_risk && (
+            <div className="flex items-start gap-1.5">
+              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-zinc-500 leading-snug">{pick.key_risk}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Investment calculator — expands inline */}
       {calcOpen && (
