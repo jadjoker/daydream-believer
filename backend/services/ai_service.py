@@ -800,10 +800,50 @@ def _score_longterm(fund: Dict, price: float, model: str = "") -> float:
     return round(score, 2)
 
 
+def _compute_support_entry(price: float, bars: list) -> tuple:
+    """Derive a meaningful entry zone from candle data using EMA and recent swing lows.
+    Returns (entry_low, entry_high, method_label).
+    """
+    if not bars or len(bars) < 10:
+        return round(price * 0.95, 2), round(price * 1.01, 2), "5% pullback target"
+
+    closes = [b["close"] for b in bars]
+    lows   = [b["low"]   for b in bars]
+
+    # EMA using all available bars (up to 50)
+    period = min(50, len(closes))
+    k = 2 / (period + 1)
+    ema = closes[0]
+    for c in closes[1:]:
+        ema = c * k + ema * (1 - k)
+    ema = round(ema, 2)
+    ema_label = f"EMA{period}"
+
+    # Recent swing low: lowest daily wick in last 20 bars
+    recent_lows = lows[-20:] if len(lows) >= 20 else lows
+    swing_low = round(min(recent_lows), 2)
+
+    dist_pct = (price - ema) / price  # positive = price above EMA
+
+    if 0 < dist_pct <= 0.12:
+        # Stock is above its EMA by < 12% — EMA is the natural limit-buy target
+        return ema, round(ema * 1.02, 2), f"{ema_label} support (${ema:.2f})"
+    elif dist_pct <= 0:
+        # Already trading below its EMA — use swing low as floor
+        entry_low = max(swing_low, round(price * 0.97, 2))
+        return entry_low, round(price * 1.005, 2), f"Below {ema_label} — swing low (${swing_low:.2f})"
+    else:
+        # More than 12% above EMA — use swing low if it's meaningful, else 8% pullback
+        if swing_low < price * 0.95:
+            return swing_low, round(swing_low * 1.03, 2), f"Swing low (${swing_low:.2f})"
+        return round(price * 0.92, 2), round(price * 0.97, 2), "8% pullback target"
+
+
 async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = None) -> List[Dict]:
     """
-    Enrich the top candidates with analyst consensus and insider signal.
-    Called AFTER initial scoring so we only hit Finnhub for the final shortlist (~16 tickers).
+    Enrich the top candidates with analyst consensus, insider signal, and
+    technically-derived entry zones (EMA50 / swing low). Called AFTER initial
+    scoring so we only hit Finnhub for the final shortlist (~16-20 tickers).
     """
     if not candidates:
         return candidates
@@ -811,22 +851,43 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
 
     tickers = [c["ticker"] for c in candidates]
 
-    # Analyst summaries: 2 Finnhub calls per ticker (price target + rec trends) batched together
+    # Sequential batches to stay within Finnhub 60-call/min free-tier limit
     analyst_results = await _batch_gather(
         [finnhub_service.get_analyst_summary(t) for t in tickers],
         batch_size=3, delay=1.2,
     )
-    # Insider summaries: 1 Finnhub call per ticker
     insider_results = await _batch_gather(
         [finnhub_service.get_insider_summary(t) for t in tickers],
         batch_size=3, delay=1.2,
     )
+    candle_results = await _batch_gather(
+        [finnhub_service.get_candles(t, period="3mo", interval="1d") for t in tickers],
+        batch_size=3, delay=1.2,
+    )
 
-    for c, analyst, insider in zip(candidates, analyst_results, insider_results):
+    for c, analyst, insider, bars in zip(candidates, analyst_results, insider_results, candle_results):
         a = analyst if isinstance(analyst, dict) else {}
         ins = insider if isinstance(insider, str) else ""
+        bars_list = bars if isinstance(bars, list) else []
 
-        # Analyst consensus line
+        # ── Technical entry zone (replaces flat ±3% band) ──────────────────
+        price = c.get("price", 0)
+        if price and bars_list:
+            entry_low, entry_high, entry_method = _compute_support_entry(price, bars_list)
+            c["entry_low"]    = entry_low
+            c["entry_high"]   = entry_high
+            c["entry_method"] = entry_method
+            # Stop relative to the new entry (not to current price)
+            c["stop_loss"] = round(entry_low * 0.88, 2)
+            # Recompute R/R with updated levels
+            target_price = c.get("target", price * 1.40)
+            risk   = max(entry_low - c["stop_loss"], 0.01)
+            reward = max(target_price - entry_low, 0)
+            c["rr"] = round(reward / risk, 1)
+        else:
+            c["entry_method"] = "near current price"
+
+        # ── Analyst consensus ───────────────────────────────────────────────
         analyst_line = ""
         buy  = a.get("analyst_buy", 0) or 0
         hold = a.get("analyst_hold", 0) or 0
@@ -835,33 +896,31 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
         if total > 0:
             analyst_line = f"Analysts: {buy}B/{hold}H/{sell}S"
         target = a.get("target_price")
-        if target and c.get("price"):
-            upside = (target - c["price"]) / c["price"] * 100
+        if target and price:
+            upside = (target - price) / price * 100
             analyst_line += f" | Target ${target:.0f} ({upside:+.0f}%)"
 
-        # Insider signal
+        # ── Insider signal ──────────────────────────────────────────────────
         insider_line = ""
         if ins == "buying":
             insider_line = "Insiders: buying ▲"
         elif ins == "selling":
             insider_line = "Insiders: selling ▼"
 
-        # Earnings date
+        # ── Earnings date ───────────────────────────────────────────────────
         earnings_line = ""
         if earnings_lookup:
             ed = earnings_lookup.get(c["ticker"])
             if ed:
                 earnings_line = f"Earnings: {ed}"
 
-        # Append to fund_summary
         extras = [x for x in [analyst_line, insider_line, earnings_line] if x]
         if extras:
             c["fund_summary"] = c.get("fund_summary", "") + " | " + " | ".join(extras)
 
-        # Store structured analyst data for scoring adjustments
-        c["_analyst"] = a
-        c["_insider"] = ins
-        c["_earnings_date"] = earnings_lookup.get(c["ticker"]) if earnings_lookup else None
+        c["_analyst"]        = a
+        c["_insider"]        = ins
+        c["_earnings_date"]  = earnings_lookup.get(c["ticker"]) if earnings_lookup else None
 
     return candidates
 
@@ -956,10 +1015,11 @@ def _build_longterm_prompt(
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
+        entry_basis = c.get("entry_method", "technical level")
         rows.append(
             f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
             f"   Fundamentals: {c['fund_summary']}\n"
-            f"   Suggested: Entry ${c['entry_low']:.2f}–${c['entry_high']:.2f} | "
+            f"   Entry target: ${c['entry_low']:.2f}–${c['entry_high']:.2f} ({entry_basis}) | "
             f"Stop ${c['stop_loss']:.2f} | 12mo Target ${c['target']:.2f} | R/R 1:{c['rr']}"
         )
     candidates_block = "\n".join(rows)
@@ -1010,8 +1070,8 @@ Every pick's thesis must reference ONLY the company matched to that ticker above
 === YOUR JOB ===
 1. Select 6–8 of the best candidates for a 6–12 month hold (fewer is fine if quality is low)
 2. Set realistic levels:
-   - Entry zone: current price ±3% (accumulate over 1–2 weeks, not a one-day fill)
-   - Stop loss: major support level, 10–20% below entry
+   - Entry zone: use the suggested technical entry (EMA50 / swing low shown above); adjust only if you have a stronger level
+   - Stop loss: already set below entry — tighten only if there is a cleaner technical floor
    - Target: realistic 12-month price target (15–40% upside typical)
 3. Write a 2-sentence thesis. EACH sentence must cite a specific numeric data point (e.g. "Revenue grew 28% YoY", "Forward P/E of 22x vs sector median of 31x", "18 of 25 analysts rate Buy with consensus target 22% above current price" — not vague claims like "strong fundamentals")
 4. Name one specific near-term catalyst and one key risk that could impair the thesis
@@ -1601,7 +1661,6 @@ BARGAIN_UNIVERSE: List[tuple] = [
     ("BMY",   "healthcare"), # Bristol-Myers — cheap, LOE concerns priced in
     ("CI",    "healthcare"), # Cigna — cheap P/E, capital return
     # ── Value industrials ────────────────────────────────────────────────────
-    ("GE",    "industrial"), # GE Aerospace — turnaround complete
     ("BA",    "industrial"), # Boeing — deep turnaround
     ("RTX",   "industrial"), # RTX — defense, cheap vs peers
     # ── Value energy ──────────────────────────────────────────────────────────
@@ -1621,14 +1680,15 @@ def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
     """Score stocks on value metrics. Rewards cheap + quality; penalizes value traps."""
     score = 0.0
 
-    # P/E — core value metric
+    # P/E — core value metric; anything above ~25x is not a bargain
     pe = fund.get("pe_ratio")
     if pe is not None and pe > 0:
         if pe < 10:      score += 6
         elif pe < 15:    score += 4
         elif pe < 20:    score += 2
-        elif pe < 30:    score += 0.5
-        elif pe > 50:    score -= 2
+        elif pe < 25:    score += 0.5
+        elif pe < 35:    score -= 1.5  # premium valuation — not a bargain
+        elif pe > 35:    score -= 3.0  # expensive; quality scores won't rescue it
 
     # P/S — important where P/E is unavailable (pre-profit)
     ps = fund.get("ps_ratio")
@@ -1777,10 +1837,11 @@ def _build_bargain_prompt(
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
+        entry_basis = c.get("entry_method", "technical level")
         rows.append(
             f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
             f"   Value metrics: {c['fund_summary']}\n"
-            f"   Suggested: Entry ${c['entry_low']:.2f}–${c['entry_high']:.2f} | Stop ${c['stop_loss']:.2f} | Target ${c['target']:.2f} | R/R 1:{c['rr']}"
+            f"   Entry target: ${c['entry_low']:.2f}–${c['entry_high']:.2f} ({entry_basis}) | Stop ${c['stop_loss']:.2f} | Target ${c['target']:.2f} | R/R 1:{c['rr']}"
         )
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
@@ -1886,10 +1947,15 @@ def _build_unified_prompt(
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
+        entry_basis = c.get("entry_method", "technical level")
+        entry_str = (
+            f"${c['entry_low']:.2f}–${c['entry_high']:.2f} ({entry_basis})"
+            if c.get("entry_low") else "at/near current price"
+        )
         rows.append(
             f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
             f"   Fundamentals: {c['fund_summary']}\n"
-            f"   Score: {c['score']:.1f}"
+            f"   Score: {c['score']:.1f} | Entry target: {entry_str}"
         )
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
@@ -1909,9 +1975,9 @@ def _build_unified_prompt(
 Your goal: identify the best stocks to hold long-term and assign each an appropriate hold horizon based on business quality, growth stage, compounding potential, and what analysts and insiders are signaling.
 
 HOLD HORIZONS — assign the most appropriate one per pick:
-- "1-3yr": near-term catalysts, valuation gap closing, current business momentum. Entry ±3%, Stop 10-15% below, Target 20-50% upside
-- "3-5yr": proven compounders with durable growth and expanding moat. Entry ±3%, Stop 15-25% below, Target 50-120% upside
-- "5-10yr": decade-long compounders or disruptors with wide moats and massive TAM. Entry ±5%, Stop 30-40% below, Target 150-400% upside
+- "1-3yr": near-term catalysts, valuation gap closing, current business momentum. Entry: use suggested technical level, Stop 10-15% below entry, Target 20-50% upside
+- "3-5yr": proven compounders with durable growth and expanding moat. Entry: use suggested technical level, Stop 15-25% below entry, Target 50-120% upside
+- "5-10yr": decade-long compounders or disruptors with wide moats and massive TAM. Entry: use suggested technical level or widen slightly, Stop 30-40% below entry, Target 150-400% upside
 
 BUSINESS MODEL LENSES (calibrate your thesis accordingly):
 - mega: reasonable valuation + market dominance; usually "1-3yr" or "3-5yr"
@@ -1945,7 +2011,7 @@ Every pick's thesis must reference ONLY the company matched to that ticker above
 === YOUR JOB ===
 1. Select 10–14 of the best candidates — spread across at least 2 different hold_horizon values
 2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
-3. Set price levels matching the horizon (see ranges above). Stop must be BELOW entry.
+3. Set price levels: use the suggested technical entry zone shown above; adjust stop and target to match the horizon ranges. Stop must be BELOW entry.
 4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
 5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (revenue growth %, margins, ratios, analyst consensus %, insider activity).
 6. Confidence ≥ 8: strong fundamentals + clear compounding path + analyst/insider confirmation. Do not include picks with confidence < 6.
