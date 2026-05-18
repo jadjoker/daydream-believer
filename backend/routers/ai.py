@@ -40,17 +40,21 @@ def _next_trading_day(now: datetime) -> tuple[str, str]:
 
 
 async def _build_market_snapshot() -> dict:
-    """Fetch SPY/QQQ/IWM/VIX + sector ETFs + treasury yields + earnings calendar. Cached 5 min."""
+    """Fetch SPY/QQQ/IWM/VIX + sector ETFs + treasury yields + earnings calendar
+    + FRED macro indicators + Finnhub economic event calendar. Cached 5 min."""
     now = time.time()
     if _snapshot_cache["ts"] and (now - _snapshot_cache["ts"]) < _SNAPSHOT_TTL and _snapshot_cache["data"]:
         return _snapshot_cache["data"]
 
     from services import finnhub_service
-    quotes_raw, sectors, yields, earnings_cal = await asyncio.gather(
+    from services import fred_service
+    quotes_raw, sectors, yields, earnings_cal, macro, econ_events = await asyncio.gather(
         asyncio.gather(*[yf_svc.get_quote(t) for t in _REGIME_TICKERS], return_exceptions=True),
         yf_svc.get_sector_performance(),
         yf_svc.get_treasury_yields(),
         finnhub_service.get_earnings_calendar(weeks_ahead=4),
+        fred_service.get_macro_snapshot(),
+        finnhub_service.get_economic_calendar(days_ahead=14),
         return_exceptions=True,
     )
 
@@ -93,7 +97,8 @@ async def _build_market_snapshot() -> dict:
             if t and d and t not in earnings_lookup:
                 earnings_lookup[t] = d
 
-    treasury = yields if isinstance(yields, dict) else {}
+    treasury   = yields if isinstance(yields, dict) else {}
+    macro_data = macro  if isinstance(macro,  dict) else {}
 
     result = {
         "spy_price": spy_p, "spy_change_pct": spy_c,
@@ -101,12 +106,21 @@ async def _build_market_snapshot() -> dict:
         "iwm_price": iwm_p, "iwm_change_pct": iwm_c,
         "vix": vix_p, "vix_change_pct": vix_c,
         "sector_performance": sectors if isinstance(sectors, list) else [],
-        "yield_10yr": treasury.get("yield_10yr"),
-        "yield_3mo": treasury.get("yield_3mo"),
-        "yield_spread": treasury.get("yield_spread"),
+        "yield_10yr":  treasury.get("yield_10yr"),
+        "yield_3mo":   treasury.get("yield_3mo"),
+        "yield_spread":treasury.get("yield_spread"),
         "earnings_lookup": earnings_lookup,
         "trending_tickers": [],
         "market_status": status,
+        # FRED macro indicators
+        "cpi_yoy":         macro_data.get("cpi_yoy"),
+        "fed_rate":        macro_data.get("fed_rate"),
+        "unemployment":    macro_data.get("unemployment"),
+        "gdp_growth":      macro_data.get("gdp_growth"),
+        "policy_stance":   macro_data.get("policy_stance", ""),
+        "inflation_trend": macro_data.get("inflation_trend", ""),
+        # Upcoming high-impact economic events
+        "economic_events": econ_events if isinstance(econ_events, list) else [],
     }
     _snapshot_cache["ts"] = time.time()
     _snapshot_cache["data"] = result

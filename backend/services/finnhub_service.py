@@ -157,6 +157,42 @@ async def get_earnings_calendar(weeks_ahead: int = 2) -> List[Dict]:
     return results
 
 
+async def get_economic_calendar(days_ahead: int = 14) -> List[Dict]:
+    """High-impact US economic events (FOMC, CPI, NFP, GDP, PCE, etc.) for the next N days."""
+    start = datetime.now().strftime("%Y-%m-%d")
+    end   = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    data  = await _get("/calendar/economic", {"from": start, "to": end})
+    if not data:
+        return []
+    events = data.get("economicCalendar", []) or []
+    _HIGH_KEYWORDS = {"FOMC", "Federal Reserve", "CPI", "NFP", "Nonfarm", "GDP", "PCE",
+                      "PPI", "JOLTS", "ISM", "Retail Sales", "Unemployment", "Payroll"}
+    results = []
+    for e in events:
+        country = (e.get("country") or "").upper()
+        impact  = (e.get("impact")  or "").lower()
+        name    = e.get("event", "")
+        if country != "US":
+            continue
+        if impact != "high" and not any(k.lower() in name.lower() for k in _HIGH_KEYWORDS):
+            continue
+        # Finnhub returns "time" as "YYYY-MM-DD HH:MM:SS" — keep only the date part
+        raw_time = e.get("time") or e.get("date") or ""
+        date_part = raw_time[:10] if raw_time else ""
+        results.append({
+            "event":    name,
+            "date":     date_part,
+            "impact":   impact,
+            "actual":   e.get("actual"),
+            "estimate": e.get("estimate"),
+            "prev":     e.get("prev"),
+            "unit":     e.get("unit", ""),
+        })
+        if len(results) >= 8:
+            break
+    return results
+
+
 async def get_company_profile(ticker: str) -> Optional[Dict]:
     return await _get("/stock/profile2", {"symbol": ticker})
 

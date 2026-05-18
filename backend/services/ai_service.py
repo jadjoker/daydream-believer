@@ -98,6 +98,38 @@ def assess_market_regime(market_overview: Dict) -> Dict:
             else:
                 yield_context += f" | Normal curve ({yield_spread:+.2f}% spread)"
 
+    # ── FRED macro context ───────────────────────────────────────────────────
+    cpi_yoy      = market_overview.get("cpi_yoy")
+    fed_rate     = market_overview.get("fed_rate")
+    unemployment = market_overview.get("unemployment")
+    gdp_growth   = market_overview.get("gdp_growth")
+
+    macro_lines = []
+    if fed_rate is not None:
+        macro_lines.append(f"Fed rate: {fed_rate:.2f}%")
+    if cpi_yoy is not None:
+        macro_lines.append(f"CPI: {cpi_yoy:.1f}% YoY")
+    if gdp_growth is not None:
+        macro_lines.append(f"GDP: {gdp_growth:.1f}% annualized")
+    if unemployment is not None:
+        macro_lines.append(f"Unemployment: {unemployment:.1f}%")
+    macro_stats = " | ".join(macro_lines) if macro_lines else ""
+
+    policy_stance   = market_overview.get("policy_stance", "")
+    inflation_trend = market_overview.get("inflation_trend", "")
+
+    # ── Upcoming economic events ─────────────────────────────────────────────
+    econ_events = market_overview.get("economic_events", [])
+    events_lines = []
+    for ev in (econ_events or [])[:5]:
+        name = ev.get("event", "")
+        date = ev.get("date", "")
+        imp  = ev.get("impact", "")
+        if name and date:
+            flag = "⚠ " if imp == "high" else ""
+            events_lines.append(f"{flag}{name} ({date})")
+    upcoming_events_str = " | ".join(events_lines) if events_lines else ""
+
     raw_vix = market_overview.get("vix") or 0
     return {
         "vix": round(vix, 2),
@@ -110,6 +142,10 @@ def assess_market_regime(market_overview: Dict) -> Dict:
         "weak_sectors": bot_sectors,
         "sector_rotation": sector_rotation,
         "yield_context": yield_context,
+        "macro_stats": macro_stats,
+        "policy_stance": policy_stance,
+        "inflation_trend": inflation_trend,
+        "upcoming_events": upcoming_events_str,
         "overall_bias": "bullish" if avg_change > 0.25 else ("bearish" if avg_change < -0.25 else "neutral"),
         "market_status": market_overview.get("market_status", "open"),
     }
@@ -495,6 +531,12 @@ def _build_prompt(
         regime_lines.append(f"Weak sectors: {', '.join(regime['weak_sectors'])}")
     if regime.get("yield_context"):
         regime_lines.append(regime["yield_context"])
+    if regime.get("macro_stats"):
+        regime_lines.append(regime["macro_stats"])
+    if regime.get("policy_stance"):
+        regime_lines.append(f"Policy stance: {regime['policy_stance']}")
+    if regime.get("upcoming_events"):
+        regime_lines.append(f"Upcoming risk events: {regime['upcoming_events']}")
     regime_block = "\n".join(regime_lines)
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
@@ -1033,6 +1075,12 @@ def _build_longterm_prompt(
         macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
     if regime.get("yield_context"):
         macro_lines.append(regime["yield_context"])
+    if regime.get("macro_stats"):
+        macro_lines.append(regime["macro_stats"])
+    if regime.get("policy_stance"):
+        macro_lines.append(f"Policy stance: {regime['policy_stance']}")
+    if regime.get("upcoming_events"):
+        macro_lines.append(f"Upcoming risk events: {regime['upcoming_events']}")
     macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert long-term growth and value investor. Today is {date_str}.{time_note}
@@ -1854,6 +1902,12 @@ def _build_bargain_prompt(
         macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
     if regime.get("yield_context"):
         macro_lines.append(regime["yield_context"])
+    if regime.get("macro_stats"):
+        macro_lines.append(regime["macro_stats"])
+    if regime.get("policy_stance"):
+        macro_lines.append(f"Policy stance: {regime['policy_stance']}")
+    if regime.get("upcoming_events"):
+        macro_lines.append(f"Upcoming risk events: {regime['upcoming_events']}")
     macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert value investor. Today is {date_str}.{time_note}
@@ -1968,6 +2022,12 @@ def _build_unified_prompt(
         macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
     if regime.get("yield_context"):
         macro_lines.append(regime["yield_context"])
+    if regime.get("macro_stats"):
+        macro_lines.append(regime["macro_stats"])
+    if regime.get("policy_stance"):
+        macro_lines.append(f"Policy stance: {regime['policy_stance']}")
+    if regime.get("upcoming_events"):
+        macro_lines.append(f"Upcoming risk events: {regime['upcoming_events']}")
     macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert long-term investor. Today is {date_str}.{time_note}
