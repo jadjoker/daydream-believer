@@ -73,20 +73,43 @@ def assess_market_regime(market_overview: Dict) -> Dict:
 
     sectors = market_overview.get("sector_performance", [])
     green = sum(1 for s in sectors if (s.get("change_pct") or 0) > 0)
-    breadth = f"{green}/{len(sectors)} sectors green"
+    breadth = f"{green}/{len(sectors)} sectors green" if sectors else "breadth data unavailable"
     top_sectors = [s["name"] for s in sorted(sectors, key=lambda x: x.get("change_pct", 0), reverse=True)[:3]]
     bot_sectors = [s["name"] for s in sorted(sectors, key=lambda x: x.get("change_pct", 0))[:2]]
+
+    # Sector rotation context (leading vs lagging)
+    sector_rotation = ""
+    if sectors:
+        leaders = [f"{s['name']} {s['change_pct']:+.1f}%" for s in sectors[:3]]
+        laggards = [f"{s['name']} {s['change_pct']:+.1f}%" for s in sectors[-2:]]
+        sector_rotation = f"Leading: {', '.join(leaders)} | Lagging: {', '.join(laggards)}"
+
+    # Treasury yield context
+    yield_10yr = market_overview.get("yield_10yr")
+    yield_spread = market_overview.get("yield_spread")
+    yield_context = ""
+    if yield_10yr:
+        yield_context = f"10yr yield: {yield_10yr:.2f}%"
+        if yield_spread is not None:
+            if yield_spread < 0:
+                yield_context += f" | Curve inverted ({yield_spread:+.2f}% spread) — recession signal"
+            elif yield_spread < 0.5:
+                yield_context += f" | Curve flat ({yield_spread:+.2f}%) — caution on rate-sensitive sectors"
+            else:
+                yield_context += f" | Normal curve ({yield_spread:+.2f}% spread)"
 
     raw_vix = market_overview.get("vix") or 0
     return {
         "vix": round(vix, 2),
-        "vix_raw": raw_vix,   # 0 means unavailable (market closed, index halted)
+        "vix_raw": raw_vix,
         "vix_regime": vix_regime,
         "direction": direction,
         "avg_index_change": round(avg_change, 2),
         "breadth": breadth,
         "top_sectors": top_sectors,
         "weak_sectors": bot_sectors,
+        "sector_rotation": sector_rotation,
+        "yield_context": yield_context,
         "overall_bias": "bullish" if avg_change > 0.25 else ("bearish" if avg_change < -0.25 else "neutral"),
         "market_status": market_overview.get("market_status", "open"),
     }
@@ -460,13 +483,19 @@ def _build_prompt(
         if regime.get("market_status") in ("closed", "pre-market", "after-hours")
         else f"VIX: {regime['vix']} — {regime['vix_regime']}"
     )
-    regime_block = (
-        f"{vix_label}\n"
-        f"Market direction: {regime['direction']}\n"
-        f"Breadth: {regime['breadth']}\n"
-        f"Top sectors: {', '.join(regime['top_sectors'])}\n"
-        f"Weak sectors: {', '.join(regime['weak_sectors'])}"
-    )
+    regime_lines = [
+        vix_label,
+        f"Market direction: {regime['direction']}",
+        f"Breadth: {regime['breadth']}",
+    ]
+    if regime.get("sector_rotation"):
+        regime_lines.append(f"Sector rotation: {regime['sector_rotation']}")
+    elif regime.get("top_sectors"):
+        regime_lines.append(f"Top sectors: {', '.join(regime['top_sectors'])}")
+        regime_lines.append(f"Weak sectors: {', '.join(regime['weak_sectors'])}")
+    if regime.get("yield_context"):
+        regime_lines.append(regime["yield_context"])
+    regime_block = "\n".join(regime_lines)
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
 
@@ -627,9 +656,11 @@ async def generate_market_picks(
 ) -> Dict:
     regime = assess_market_regime(market_overview)
 
+    earnings_lookup = market_overview.get("earnings_lookup") or {}
+
     if mode == "unified":
         try:
-            candidates = await screen_longterm_candidates(top_n=16)
+            candidates = await screen_longterm_candidates(top_n=16, earnings_lookup=earnings_lookup)
         except Exception:
             candidates = []
         if not candidates:
@@ -638,7 +669,7 @@ async def generate_market_picks(
         prompt = _build_unified_prompt(candidates, market_overview, date_str)
     elif mode == "bargain":
         try:
-            candidates = await screen_bargain_candidates(top_n=14)
+            candidates = await screen_bargain_candidates(top_n=14, earnings_lookup=earnings_lookup)
         except Exception:
             candidates = []
         if not candidates:
@@ -647,7 +678,7 @@ async def generate_market_picks(
         prompt = _build_bargain_prompt(candidates, market_overview, date_str)
     elif mode == "long":
         try:
-            candidates = await screen_longterm_candidates(top_n=10)
+            candidates = await screen_longterm_candidates(top_n=10, earnings_lookup=earnings_lookup)
         except Exception:
             candidates = []
         if not candidates:
@@ -656,7 +687,7 @@ async def generate_market_picks(
         prompt = _build_longterm_prompt(candidates, market_overview, date_str)
     elif mode == "discovery":
         try:
-            candidates = await screen_discovery_candidates(top_n=10)
+            candidates = await screen_discovery_candidates(top_n=10, earnings_lookup=earnings_lookup)
         except Exception:
             candidates = []
         if not candidates:
@@ -769,7 +800,73 @@ def _score_longterm(fund: Dict, price: float, model: str = "") -> float:
     return round(score, 2)
 
 
-async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
+async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = None) -> List[Dict]:
+    """
+    Enrich the top candidates with analyst consensus and insider signal.
+    Called AFTER initial scoring so we only hit Finnhub for the final shortlist (~16 tickers).
+    """
+    if not candidates:
+        return candidates
+    from services import finnhub_service
+
+    tickers = [c["ticker"] for c in candidates]
+
+    # Analyst summaries: 2 Finnhub calls per ticker (price target + rec trends) batched together
+    analyst_results = await _batch_gather(
+        [finnhub_service.get_analyst_summary(t) for t in tickers],
+        batch_size=3, delay=1.2,
+    )
+    # Insider summaries: 1 Finnhub call per ticker
+    insider_results = await _batch_gather(
+        [finnhub_service.get_insider_summary(t) for t in tickers],
+        batch_size=3, delay=1.2,
+    )
+
+    for c, analyst, insider in zip(candidates, analyst_results, insider_results):
+        a = analyst if isinstance(analyst, dict) else {}
+        ins = insider if isinstance(insider, str) else ""
+
+        # Analyst consensus line
+        analyst_line = ""
+        buy  = a.get("analyst_buy", 0) or 0
+        hold = a.get("analyst_hold", 0) or 0
+        sell = a.get("analyst_sell", 0) or 0
+        total = buy + hold + sell
+        if total > 0:
+            analyst_line = f"Analysts: {buy}B/{hold}H/{sell}S"
+        target = a.get("target_price")
+        if target and c.get("price"):
+            upside = (target - c["price"]) / c["price"] * 100
+            analyst_line += f" | Target ${target:.0f} ({upside:+.0f}%)"
+
+        # Insider signal
+        insider_line = ""
+        if ins == "buying":
+            insider_line = "Insiders: buying ▲"
+        elif ins == "selling":
+            insider_line = "Insiders: selling ▼"
+
+        # Earnings date
+        earnings_line = ""
+        if earnings_lookup:
+            ed = earnings_lookup.get(c["ticker"])
+            if ed:
+                earnings_line = f"Earnings: {ed}"
+
+        # Append to fund_summary
+        extras = [x for x in [analyst_line, insider_line, earnings_line] if x]
+        if extras:
+            c["fund_summary"] = c.get("fund_summary", "") + " | " + " | ".join(extras)
+
+        # Store structured analyst data for scoring adjustments
+        c["_analyst"] = a
+        c["_insider"] = ins
+        c["_earnings_date"] = earnings_lookup.get(c["ticker"]) if earnings_lookup else None
+
+    return candidates
+
+
+async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = None) -> List[Dict]:
     now = time.time()
     if _longterm_cache["ts"] and (now - _longterm_cache["ts"]) < _FUND_CACHE_TTL and _longterm_cache["data"]:
         return _longterm_cache["data"][:top_n]
@@ -777,7 +874,6 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    # All tickers in the universe are eligible for long-term
     all_tickers = [t for t, _ in EQUITY_UNIVERSE]
     model_map = EQUITY_MODEL
 
@@ -795,6 +891,12 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
         model = model_map.get(ticker, "")
         score = _score_longterm(f, price, model)
 
+        # Short float bonus/penalty: high short interest on a quality stock = potential squeeze upside
+        short_float = q.get("short_float")
+        if short_float is not None:
+            if short_float > 0.20:   score -= 1.0   # heavily shorted = risky, penalise slightly
+            elif short_float > 0.10: score -= 0.5
+
         entry_low  = round(price * 0.97, 2)
         entry_high = round(price * 1.03, 2)
         stop_loss  = round(price * 0.85, 2)
@@ -811,6 +913,8 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
         if f.get("roe") is not None:              parts.append(f"ROE {f['roe']*100:.1f}%")
         if f.get("debt_to_equity") is not None:   parts.append(f"D/E {f['debt_to_equity']:.0f}")
         if f.get("dividend_yield"):               parts.append(f"Div {f['dividend_yield']*100:.1f}%")
+        if short_float is not None and short_float > 0.05:
+            parts.append(f"Short {short_float*100:.0f}%")
         if f.get("free_cashflow"):
             fcf = f["free_cashflow"]
             parts.append(f"FCF {'${:.1f}B'.format(fcf/1e9) if abs(fcf) >= 1e9 else '${:.0f}M'.format(fcf/1e6)}")
@@ -831,9 +935,15 @@ async def screen_longterm_candidates(top_n: int = 8) -> List[Dict]:
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Enrich top candidates with analyst consensus + insider signal + earnings date
+    top = candidates[:max(top_n + 4, 20)]
+    top = await _enrich_candidates(top, earnings_lookup)
+    top.sort(key=lambda x: x["score"], reverse=True)
+
     _longterm_cache["ts"] = time.time()
-    _longterm_cache["data"] = candidates
-    return candidates[:top_n]
+    _longterm_cache["data"] = top + candidates[len(top):]
+    return top[:top_n]
 
 
 # ─── Long-term prompt builder ─────────────────────────────────────────────────
@@ -857,10 +967,17 @@ def _build_longterm_prompt(
     vix = market_overview.get("vix") or 20
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
     time_note = _market_time_context(market_overview, "the next session")
+    regime = assess_market_regime(market_overview)
+    macro_lines = [f"SPY: {spy_c:+.1f}% | VIX: {vix:.1f}"]
+    if regime.get("sector_rotation"):
+        macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
+    if regime.get("yield_context"):
+        macro_lines.append(regime["yield_context"])
+    macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert long-term growth and value investor. Today is {date_str}.{time_note}
 
-Evaluate these stocks as 6–12 month conviction plays. Focus on business quality, fundamentals, and valuation.
+Evaluate these stocks as 6–12 month conviction plays. Focus on business quality, fundamentals, valuation, and what Wall Street analysts are saying.
 
 Business model tags — use to calibrate your investment lens:
 - mega: look for reasonable valuation and continued market dominance
@@ -873,12 +990,19 @@ Business model tags — use to calibrate your investment lens:
 - consumer: same-store sales growth, unit economics, brand pricing power
 - industrial/energy: cycle positioning, dividend yield, balance sheet health
 
+HOW TO USE ANALYST & INSIDER DATA (shown in fund_summary):
+- "Analysts: 18B/5H/2S | Target $425 (+22%)" → strong buy consensus with meaningful upside to target → positive signal
+- "Analysts: 5B/8H/6S | Target $95 (-3%)" → divided consensus, target below current price → cautious
+- "Insiders: buying ▲" → management buying own stock → strong bullish confirmation signal
+- "Insiders: selling ▼" → insider distribution → investigate whether thesis is intact
+- "Earnings: 2025-05-28" → upcoming earnings = near-term catalyst OR binary risk event
+
 TICKER IDENTITY — memorize before writing any thesis:
 {ticker_map}
 Every pick's thesis must reference ONLY the company matched to that ticker above.
 
 === MACRO CONTEXT ===
-SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
+{macro_block}
 
 === CANDIDATES ===
 {candidates_block}
@@ -889,9 +1013,9 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
    - Entry zone: current price ±3% (accumulate over 1–2 weeks, not a one-day fill)
    - Stop loss: major support level, 10–20% below entry
    - Target: realistic 12-month price target (15–40% upside typical)
-3. Write a 2-sentence thesis. EACH sentence must cite a specific numeric data point (e.g. "Revenue grew 28% YoY", "Forward P/E of 22x vs sector median of 31x" — not vague claims like "strong fundamentals")
+3. Write a 2-sentence thesis. EACH sentence must cite a specific numeric data point (e.g. "Revenue grew 28% YoY", "Forward P/E of 22x vs sector median of 31x", "18 of 25 analysts rate Buy with consensus target 22% above current price" — not vague claims like "strong fundamentals")
 4. Name one specific near-term catalyst and one key risk that could impair the thesis
-5. Confidence 8–10: strong growth + reasonable valuation + clear catalyst. Below 6 = don't include.
+5. Confidence 8–10: strong growth + reasonable valuation + analyst consensus confirming + clear catalyst. Below 6 = don't include.
 
 RULES:
 - trade_type must be one of:
@@ -1103,16 +1227,20 @@ async def _analyze_ticker_longterm(ticker: str) -> Dict:
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    quote, ta, fund = await asyncio.gather(
+    quote, ta, fund, analyst, insider = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1wk"),
         finnhub_service.get_fundamentals_mapped(ticker),
+        finnhub_service.get_analyst_summary(ticker),
+        finnhub_service.get_insider_summary(ticker),
         return_exceptions=True,
     )
 
     quote_data = quote if isinstance(quote, dict) else {}
     ta_data = ta if isinstance(ta, dict) else {}
     fund_data = fund if isinstance(fund, dict) else {}
+    analyst_data = analyst if isinstance(analyst, dict) else {}
+    insider_signal = insider if isinstance(insider, str) else ""
 
     price = quote_data.get("price") or ta_data.get("price") or 0
     name = quote_data.get("name", ticker)
@@ -1151,13 +1279,26 @@ async def _analyze_ticker_longterm(ticker: str) -> Dict:
 
     model_context = f"\nBusiness model: {model} — {{\n  'mega': 'focus on valuation vs moat strength',\n  'saas': 'ARR growth rate and net revenue retention are key',\n  'platform': 'network effects and user monetization trajectory',\n  'fintech': 'payment volume growth and regulatory positioning',\n  'deeptech': 'technology differentiation and path to profitability',\n  'healthcare': 'pipeline, patent life, and regulatory catalysts',\n  'consumer': 'unit economics and brand durability — not a platform moat thesis',\n  'financial': 'NIM and credit quality cycle',\n  'industrial': 'cycle positioning and capital discipline',\n  'energy': 'commodity exposure and dividend sustainability',\n}}.get('{model}', '')" if model else ""
 
+    lt_analyst_str = ""
+    a_buy = analyst_data.get("analyst_buy", 0) or 0
+    a_hold = analyst_data.get("analyst_hold", 0) or 0
+    a_sell = analyst_data.get("analyst_sell", 0) or 0
+    a_target = analyst_data.get("target_price")
+    if (a_buy + a_hold + a_sell) > 0:
+        lt_analyst_str = f"Analyst consensus: {a_buy}B/{a_hold}H/{a_sell}S"
+        if a_target and price:
+            upside = (a_target - price) / price * 100
+            lt_analyst_str += f" | Street target ${a_target:.0f} ({upside:+.0f}% from current)"
+    lt_insider_str = f"Insider activity: {insider_signal} {'▲' if insider_signal == 'buying' else '▼' if insider_signal == 'selling' else ''}" if insider_signal else ""
+    extra_lines = "\n".join(x for x in [lt_analyst_str, lt_insider_str] if x)
+
     prompt = f"""You are an expert long-term investor. Analyze {ticker} ({name}) for a 6–12 month hold.
 
 Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}{f' | Business model: {model}' if model else ''}
 
 FUNDAMENTALS:
 {fund_str}
-
+{extra_lines + chr(10) if extra_lines else ""}
 Decide: BUY (accumulate over 1–2 weeks), HOLD (wait for better conditions), or AVOID (business concerns).
 
 BUY criteria: positive revenue growth + healthy margins + reasonable valuation + clear catalyst
@@ -1264,7 +1405,7 @@ def _score_discovery(fund: Dict, price: float, model: str = "") -> float:
     return round(score, 2)
 
 
-async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
+async def screen_discovery_candidates(top_n: int = 8, earnings_lookup: Dict = None) -> List[Dict]:
     now = time.time()
     if _discovery_cache["ts"] and (now - _discovery_cache["ts"]) < _FUND_CACHE_TTL and _discovery_cache["data"]:
         return _discovery_cache["data"][:top_n]
@@ -1325,9 +1466,15 @@ async def screen_discovery_candidates(top_n: int = 8) -> List[Dict]:
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Enrich top candidates with analyst consensus + insider signal + earnings date
+    top = candidates[:max(top_n + 4, 14)]
+    top = await _enrich_candidates(top, earnings_lookup)
+    top.sort(key=lambda x: x["score"], reverse=True)
+
     _discovery_cache["ts"] = time.time()
-    _discovery_cache["data"] = candidates
-    return candidates[:top_n]
+    _discovery_cache["data"] = top + candidates[len(top):]
+    return top[:top_n]
 
 
 # ─── Discovery prompt builder ─────────────────────────────────────────────────
@@ -1345,8 +1492,15 @@ def _build_discovery_prompt(candidates: List[Dict], date_str: str, market_overvi
     candidates_block = "\n".join(rows)
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
     time_note = _market_time_context(market_overview or {}, "the next session")
+    regime = assess_market_regime(market_overview or {})
+    macro_lines = []
+    if regime.get("sector_rotation"):
+        macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
+    if regime.get("yield_context"):
+        macro_lines.append(regime["yield_context"])
+    macro_note = ("\n\n=== MACRO CONTEXT ===\n" + "\n".join(macro_lines)) if macro_lines else ""
 
-    return f"""You are an expert long-term investor focused on 10-year compounders. Today is {date_str}.{time_note}
+    return f"""You are an expert long-term investor focused on 10-year compounders. Today is {date_str}.{time_note}{macro_note}
 
 Your goal: identify companies worth holding for 10 years — businesses that can compound returns through earnings growth, market expansion, and durable competitive advantages. These are higher-growth candidates pre-screened from the universe, but the core question is always: "Would a patient investor be meaningfully rewarded holding this through a full decade?"
 
@@ -1355,6 +1509,11 @@ Business model lens (calibrate your thesis accordingly):
 - platform: network effect durability, user growth trajectory, take-rate expansion over time
 - fintech: payment volume compounding, margin expansion as scale grows, regulatory positioning
 - deeptech: technology differentiation depth, path from R&D to dominant revenue, patent moat longevity
+
+HOW TO USE ANALYST & INSIDER DATA (shown in growth metrics):
+- Strong analyst buy consensus (e.g. "15B/3H/1S") → institutional conviction aligns with thesis
+- "Insiders: buying ▲" → management putting own money in → long-term confidence signal
+- "Earnings: date" → upcoming catalyst that could accelerate or de-risk the thesis
 
 TICKER IDENTITY — memorize before writing any thesis:
 {ticker_map}
@@ -1532,7 +1691,7 @@ def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
     return round(score, 2)
 
 
-async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
+async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = None) -> List[Dict]:
     now = time.time()
     if _bargain_cache["ts"] and (now - _bargain_cache["ts"]) < _FUND_CACHE_TTL and _bargain_cache["data"]:
         return _bargain_cache["data"][:top_n]
@@ -1556,10 +1715,15 @@ async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
         model = BARGAIN_MODEL.get(ticker, "")
         score = _score_bargain(f, price, model)
 
+        # High short interest on a value stock can signal contrarian opportunity or value trap
+        short_float = q.get("short_float")
+        if short_float is not None and short_float > 0.15:
+            score -= 1.0   # heavily shorted value stocks are often traps
+
         entry_low  = round(price * 0.97, 2)
         entry_high = round(price * 1.03, 2)
-        stop_loss  = round(price * 0.82, 2)   # tighter stops for value (less speculative)
-        target     = round(price * 1.40, 2)   # realistic reversion target
+        stop_loss  = round(price * 0.82, 2)
+        target     = round(price * 1.40, 2)
         rr = round((target - price) / max(price - stop_loss, 0.01), 1)
 
         parts = []
@@ -1570,6 +1734,8 @@ async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
         if f.get("roe") is not None:            parts.append(f"ROE {f['roe']*100:.1f}%")
         if f.get("dividend_yield"):             parts.append(f"Div {f['dividend_yield']*100:.1f}%")
         if f.get("debt_to_equity") is not None: parts.append(f"D/E {f['debt_to_equity']:.0f}")
+        if short_float is not None and short_float > 0.05:
+            parts.append(f"Short {short_float*100:.0f}%")
         if f.get("free_cashflow"):
             fcf = f["free_cashflow"]
             parts.append(f"FCF {'${:.1f}B'.format(fcf/1e9) if abs(fcf) >= 1e9 else '${:.0f}M'.format(fcf/1e6)}")
@@ -1590,9 +1756,15 @@ async def screen_bargain_candidates(top_n: int = 10) -> List[Dict]:
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Enrich top candidates with analyst consensus + insider signal + earnings date
+    top = candidates[:max(top_n + 4, 18)]
+    top = await _enrich_candidates(top, earnings_lookup)
+    top.sort(key=lambda x: x["score"], reverse=True)
+
     _bargain_cache["ts"] = time.time()
-    _bargain_cache["data"] = candidates
-    return candidates[:top_n]
+    _bargain_cache["data"] = top + candidates[len(top):]
+    return top[:top_n]
 
 
 # ─── Bargain prompt builder ───────────────────────────────────────────────────
@@ -1615,6 +1787,13 @@ def _build_bargain_prompt(
     vix = market_overview.get("vix") or 20
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
     time_note = _market_time_context(market_overview, "the next session")
+    regime = assess_market_regime(market_overview)
+    macro_lines = [f"SPY: {spy_c:+.1f}% | VIX: {vix:.1f}"]
+    if regime.get("sector_rotation"):
+        macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
+    if regime.get("yield_context"):
+        macro_lines.append(regime["yield_context"])
+    macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert value investor. Today is {date_str}.{time_note}
 
@@ -1630,6 +1809,7 @@ AVOID these value traps:
 - Dividends funded by debt or unsustainable payout ratios
 - Over-levered balance sheets where a downturn could cause permanent impairment
 - Commodity businesses with no pricing power trading cheap for good reasons
+- High short interest (Short >15%) on a stock with declining fundamentals — the market is often right
 
 BUSINESS MODEL LENSES (calibrate your thesis):
 - financial: P/B, ROE trajectory, capital return. "1-3yr" or "3-5yr"
@@ -1641,12 +1821,19 @@ BUSINESS MODEL LENSES (calibrate your thesis):
 - platform: user monetization trajectory even at low current multiples. "3-5yr"
 - saas/deeptech: path to profitability, moat at discounted entry. "3-5yr" or "5-10yr"
 
+HOW TO USE ANALYST & INSIDER DATA (shown in fund_summary):
+- "Analysts: 12B/6H/2S | Target $85 (+35%)" → Street sees meaningful rerating catalyst → supports conviction
+- "Analysts: 3B/10H/8S | Target $38 (-5%)" → analysts are skeptical → require stronger fundamental justification
+- "Insiders: buying ▲" → management accumulating at these levels → strong contrarian confirmation
+- "Insiders: selling ▼" → insiders exiting → be cautious, risk of further deterioration
+- "Earnings: 2025-06-05" → imminent catalyst — frame as opportunity (beat = re-rate) or risk (miss = more pain)
+
 TICKER IDENTITY — memorize before writing any thesis:
 {ticker_map}
 Every pick's thesis must reference ONLY the company matched to that ticker above.
 
 === MACRO CONTEXT ===
-SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
+{macro_block}
 
 === VALUE CANDIDATES (ranked by fundamentals + valuation score) ===
 {candidates_block}
@@ -1656,8 +1843,8 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
 2. Assign hold_horizon: "1-3yr" (near-term catalyst), "3-5yr" (multi-year recovery), "5-10yr" (durable long-term compounder at great price)
 3. Set realistic price targets: value reversion typically 25–80%; do NOT project the same 200–400% as speculative plays
 4. trade_type must be one of: value, dividend, turnaround, compounder, growth
-5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (P/E, yield, margin, revenue growth %). NO vague phrases.
-6. Confidence ≥ 7: clear undervaluation + durable business + credible catalyst. Do not include < 6.
+5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (P/E, yield, margin, revenue growth %, analyst upside %). NO vague phrases.
+6. Confidence ≥ 7: clear undervaluation + durable business + credible catalyst + analyst/insider support. Do not include < 6.
 
 RULES:
 - Stop must be BELOW entry
@@ -1709,10 +1896,17 @@ def _build_unified_prompt(
     vix = market_overview.get("vix") or 20
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
     time_note = _market_time_context(market_overview, "the next session")
+    regime = assess_market_regime(market_overview)
+    macro_lines = [f"SPY: {spy_c:+.1f}% | VIX: {vix:.1f}"]
+    if regime.get("sector_rotation"):
+        macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
+    if regime.get("yield_context"):
+        macro_lines.append(regime["yield_context"])
+    macro_block = "\n".join(macro_lines)
 
     return f"""You are an expert long-term investor. Today is {date_str}.{time_note}
 
-Your goal: identify the best stocks to hold long-term and assign each an appropriate hold horizon based on business quality, growth stage, and compounding potential.
+Your goal: identify the best stocks to hold long-term and assign each an appropriate hold horizon based on business quality, growth stage, compounding potential, and what analysts and insiders are signaling.
 
 HOLD HORIZONS — assign the most appropriate one per pick:
 - "1-3yr": near-term catalysts, valuation gap closing, current business momentum. Entry ±3%, Stop 10-15% below, Target 20-50% upside
@@ -1730,12 +1924,20 @@ BUSINESS MODEL LENSES (calibrate your thesis accordingly):
 - financial: ROE consistency, dividend growth → "1-3yr" or "3-5yr"
 - industrial/energy: cycle positioning, capital return → "1-3yr" or "3-5yr"
 
+HOW TO USE ANALYST & INSIDER DATA (shown in fund_summary):
+- "Analysts: 20B/5H/1S | Target $520 (+18%)" → overwhelming buy consensus + upside to target → lift confidence
+- "Analysts: 6B/12H/8S | Target $140 (+2%)" → mixed/negative — only include if fundamentals justify contrarian call
+- "Insiders: buying ▲" → management conviction at current levels → strong confirming signal, increase confidence
+- "Insiders: selling ▼" → worth flagging in key_risk even if fundamentals look good
+- "Earnings: 2025-05-30" → use as specific catalyst in your catalyst field
+- "Short 18%" → heavily shorted — either value trap risk OR short squeeze potential; evaluate with fundamentals
+
 TICKER IDENTITY — memorize before writing any thesis:
 {ticker_map}
 Every pick's thesis must reference ONLY the company matched to that ticker above.
 
 === MACRO CONTEXT ===
-SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
+{macro_block}
 
 === CANDIDATES (ranked by fundamental score) ===
 {candidates_block}
@@ -1745,8 +1947,8 @@ SPY: {spy_c:+.1f}% | VIX: {vix:.1f}
 2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
 3. Set price levels matching the horizon (see ranges above). Stop must be BELOW entry.
 4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
-5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (revenue growth %, margins, ratios).
-6. Confidence ≥ 8: strong fundamentals + clear compounding path. Do not include picks with confidence < 6.
+5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (revenue growth %, margins, ratios, analyst consensus %, insider activity).
+6. Confidence ≥ 8: strong fundamentals + clear compounding path + analyst/insider confirmation. Do not include picks with confidence < 6.
 
 RULES:
 - market_summary must reference VIX {vix:.1f} and macro conditions for long-term position building
@@ -1788,11 +1990,13 @@ async def analyze_ticker_all_modes(
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    quote_yf, ta, fund, quote_fh = await asyncio.gather(
+    quote_yf, ta, fund, quote_fh, analyst, insider = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1d"),
         finnhub_service.get_fundamentals_mapped(ticker),
         finnhub_service.get_quote(ticker),
+        finnhub_service.get_analyst_summary(ticker),
+        finnhub_service.get_insider_summary(ticker),
         return_exceptions=True,
     )
 
@@ -1800,6 +2004,8 @@ async def analyze_ticker_all_modes(
     ta_data = ta if isinstance(ta, dict) else {}
     fund_data = fund if isinstance(fund, dict) else {}
     fh_data = quote_fh if isinstance(quote_fh, dict) else {}
+    analyst_data = analyst if isinstance(analyst, dict) else {}
+    insider_signal = insider if isinstance(insider, str) else ""
 
     price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
     name = quote_data.get("name") or fh_data.get("name") or ticker
@@ -1860,6 +2066,19 @@ async def analyze_ticker_all_modes(
     ] if x]
     fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data limited"
 
+    # Analyst consensus line
+    analyst_str = ""
+    a_buy = analyst_data.get("analyst_buy", 0) or 0
+    a_hold = analyst_data.get("analyst_hold", 0) or 0
+    a_sell = analyst_data.get("analyst_sell", 0) or 0
+    a_target = analyst_data.get("target_price")
+    if (a_buy + a_hold + a_sell) > 0:
+        analyst_str = f"Analysts: {a_buy}B/{a_hold}H/{a_sell}S"
+        if a_target and price:
+            upside = (a_target - price) / price * 100
+            analyst_str += f" | Target ${a_target:.0f} ({upside:+.0f}%)"
+    insider_str = f"Insiders: {insider_signal} {'▲' if insider_signal == 'buying' else '▼' if insider_signal == 'selling' else ''}" if insider_signal else ""
+
     model_lens = {
         "mega":       "dominant incumbent — value vs moat sustainability; usually 1-3yr or 3-5yr",
         "saas":       "recurring revenue flywheel — ARR growth, NRR >120%, gross margin expansion; often 3-5yr or 5-10yr",
@@ -1876,12 +2095,13 @@ async def analyze_ticker_all_modes(
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
 
+    extra_context = "\n".join(x for x in [analyst_str, insider_str] if x)
     prompt = f"""You are a long-term investment expert. Analyze {ticker} ({name}) and assign it ONE best-fit hold horizon.{time_note}
 
 STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}{model_context}
 TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'}
 FUNDAMENTALS: {fund_str}
-MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']}
+{extra_context + chr(10) if extra_context else ""}MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']}
 
 HOLD HORIZONS — choose the single best fit:
 - "1-3yr": near-term catalysts, valuation gap. Entry ±3%, Stop 10-15%, Target 20-50% upside. (Default levels: Entry ${h1_levels['entry_low']:.2f}–${h1_levels['entry_high']:.2f}, Stop ${h1_levels['stop_loss']:.2f}, Target ${h1_levels['target']:.2f})

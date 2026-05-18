@@ -192,6 +192,48 @@ async def get_market_news_sentiment(ticker: str) -> Optional[Dict]:
     return await _get("/news-sentiment", {"symbol": ticker})
 
 
+async def get_analyst_summary(ticker: str) -> Dict:
+    """Fetch analyst price target and buy/hold/sell consensus. Returns compact dict."""
+    pt, recs = await asyncio.gather(
+        get_price_target(ticker),
+        get_recommendation_trends(ticker),
+        return_exceptions=True,
+    )
+    result: Dict = {}
+    if isinstance(pt, dict):
+        target = pt.get("targetMean") or pt.get("targetMedian")
+        result["target_price"] = round(float(target), 2) if target else None
+        result["target_high"] = pt.get("targetHigh")
+        result["target_low"] = pt.get("targetLow")
+        result["analyst_count"] = int(pt.get("numberOfAnalysts") or 0)
+    if isinstance(recs, list) and recs:
+        r = recs[0]  # most recent period
+        buy  = int((r.get("strongBuy") or 0) + (r.get("buy") or 0))
+        hold = int(r.get("hold") or 0)
+        sell = int((r.get("sell") or 0) + (r.get("strongSell") or 0))
+        result["analyst_buy"] = buy
+        result["analyst_hold"] = hold
+        result["analyst_sell"] = sell
+    return result
+
+
+async def get_insider_summary(ticker: str) -> str:
+    """Returns 'buying', 'selling', or 'neutral' based on recent insider MSPR."""
+    data = await get_insider_sentiment(ticker)
+    if not isinstance(data, dict):
+        return ""
+    items = data.get("data") or []
+    if not items:
+        return ""
+    recent = items[-3:] if len(items) >= 3 else items
+    net = sum(float(item.get("mspr") or 0) for item in recent)
+    if net > 0.05:
+        return "buying"
+    elif net < -0.05:
+        return "selling"
+    return "neutral"
+
+
 async def get_fundamentals_mapped(ticker: str) -> Optional[Dict]:
     """
     Fetch Finnhub basic financials and normalize to the same schema as

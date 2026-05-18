@@ -40,16 +40,23 @@ def _next_trading_day(now: datetime) -> tuple[str, str]:
 
 
 async def _build_market_snapshot() -> dict:
-    """Fetch SPY/QQQ/IWM/VIX for regime assessment only. Cached 5 min."""
+    """Fetch SPY/QQQ/IWM/VIX + sector ETFs + treasury yields + earnings calendar. Cached 5 min."""
     now = time.time()
     if _snapshot_cache["ts"] and (now - _snapshot_cache["ts"]) < _SNAPSHOT_TTL and _snapshot_cache["data"]:
         return _snapshot_cache["data"]
 
-    quotes = await asyncio.gather(
-        *[yf_svc.get_quote(t) for t in _REGIME_TICKERS],
+    from services import finnhub_service
+    quotes_raw, sectors, yields, earnings_cal = await asyncio.gather(
+        asyncio.gather(*[yf_svc.get_quote(t) for t in _REGIME_TICKERS], return_exceptions=True),
+        yf_svc.get_sector_performance(),
+        yf_svc.get_treasury_yields(),
+        finnhub_service.get_earnings_calendar(weeks_ahead=4),
         return_exceptions=True,
     )
-    idx = {t: (q if isinstance(q, dict) else None) for t, q in zip(_REGIME_TICKERS, quotes)}
+
+    if isinstance(quotes_raw, Exception):
+        quotes_raw = [None] * len(_REGIME_TICKERS)
+    idx = {t: (q if isinstance(q, dict) else None) for t, q in zip(_REGIME_TICKERS, quotes_raw)}
 
     def pc(t):
         q = idx.get(t)
@@ -77,12 +84,27 @@ async def _build_market_snapshot() -> dict:
     else:
         status = "closed"
 
+    # Build earnings lookup: ticker → nearest upcoming report date
+    earnings_lookup: dict = {}
+    if isinstance(earnings_cal, list):
+        for ev in earnings_cal:
+            t = (ev.get("ticker") or "").upper()
+            d = ev.get("report_date") or ""
+            if t and d and t not in earnings_lookup:
+                earnings_lookup[t] = d
+
+    treasury = yields if isinstance(yields, dict) else {}
+
     result = {
         "spy_price": spy_p, "spy_change_pct": spy_c,
         "qqq_price": qqq_p, "qqq_change_pct": qqq_c,
         "iwm_price": iwm_p, "iwm_change_pct": iwm_c,
         "vix": vix_p, "vix_change_pct": vix_c,
-        "sector_performance": [],
+        "sector_performance": sectors if isinstance(sectors, list) else [],
+        "yield_10yr": treasury.get("yield_10yr"),
+        "yield_3mo": treasury.get("yield_3mo"),
+        "yield_spread": treasury.get("yield_spread"),
+        "earnings_lookup": earnings_lookup,
         "trending_tickers": [],
         "market_status": status,
     }
@@ -105,9 +127,10 @@ async def _inner_generate_all_picks() -> dict:
 
     # Phase 2: pre-warm screening caches sequentially — running both in parallel
     # doubles the concurrent Finnhub call rate and triggers 429s on the free tier.
+    earnings_lookup = market_data.get("earnings_lookup") or {}
     for _screen in [
-        ai_service.screen_longterm_candidates(top_n=16),
-        ai_service.screen_bargain_candidates(top_n=14),
+        ai_service.screen_longterm_candidates(top_n=16, earnings_lookup=earnings_lookup),
+        ai_service.screen_bargain_candidates(top_n=14, earnings_lookup=earnings_lookup),
     ]:
         try:
             await _screen

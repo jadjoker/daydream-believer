@@ -360,3 +360,58 @@ async def get_fundamentals(ticker: str) -> Optional[Dict]:
             print(f"[YF] fundamentals error for {ticker}: {e}")
             return None
     return await _run_sync(_fetch)
+
+
+_SECTOR_ETFS = {
+    "XLK": "Technology", "XLF": "Financials", "XLC": "Communication",
+    "XLV": "Healthcare", "XLI": "Industrials", "XLE": "Energy",
+    "XLY": "Consumer Disc", "XLU": "Utilities", "XLRE": "Real Estate",
+    "XLP": "Cons Staples", "XLB": "Materials",
+}
+
+async def get_sector_performance() -> List[Dict]:
+    """Batch-fetch all 11 sector ETF 1-day % changes via a single yfinance download."""
+    def _fetch():
+        try:
+            tickers = list(_SECTOR_ETFS.keys())
+            data = yf.download(tickers, period="5d", interval="1d", progress=False, auto_adjust=True)
+            if data.empty:
+                return []
+            close = data["Close"]
+            result = []
+            for ticker, name in _SECTOR_ETFS.items():
+                try:
+                    col = close[ticker].dropna()
+                    if len(col) >= 2:
+                        chg = (col.iloc[-1] - col.iloc[-2]) / col.iloc[-2] * 100
+                        result.append({"name": name, "ticker": ticker, "change_pct": round(float(chg), 2)})
+                except Exception:
+                    pass
+            result.sort(key=lambda x: x["change_pct"], reverse=True)
+            return result
+        except Exception as e:
+            print(f"[YF] get_sector_performance error: {e}")
+            return []
+    return await _run_sync(_fetch)
+
+
+async def get_treasury_yields() -> Dict:
+    """Fetch 10-year (^TNX) and 3-month T-bill (^IRX) yields. Returns % values."""
+    def _fetch():
+        try:
+            data = yf.download(["^TNX", "^IRX"], period="5d", interval="1d", progress=False, auto_adjust=True)
+            if data.empty:
+                return {}
+            close = data["Close"]
+            tnx = float(close["^TNX"].dropna().iloc[-1]) if "^TNX" in close.columns else None
+            irx = float(close["^IRX"].dropna().iloc[-1]) if "^IRX" in close.columns else None
+            spread = round(tnx - irx, 2) if tnx and irx else None
+            return {
+                "yield_10yr": round(tnx, 2) if tnx else None,
+                "yield_3mo": round(irx, 2) if irx else None,
+                "yield_spread": spread,  # positive = normal, negative = inverted (recession signal)
+            }
+        except Exception as e:
+            print(f"[YF] get_treasury_yields error: {e}")
+            return {}
+    return await _run_sync(_fetch)
