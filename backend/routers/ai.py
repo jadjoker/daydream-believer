@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel
 from services import ai_service
 from services.screener_service import run_screener
 from services import yahoo_finance as yf_svc
@@ -367,7 +368,7 @@ async def clear_mode_cache(mode: str, _: None = Depends(_require_passcode)):
 
 
 @router.get("/analyze-all/{ticker}")
-async def analyze_ticker_all(ticker: str, _: None = Depends(_require_passcode)):
+async def analyze_ticker_all(ticker: str):
     """Single-prompt analysis across all 3 horizons — 1 Claude call instead of 3."""
     try:
         now = datetime.now(pytz.timezone("US/Eastern"))
@@ -392,7 +393,6 @@ async def analyze_ticker_all(ticker: str, _: None = Depends(_require_passcode)):
 async def analyze_ticker(
     ticker: str,
     mode: str = Query("short", pattern="^(short|long|discovery)$"),
-    _: None = Depends(_require_passcode),
 ):
     """Analyze a single ticker on demand. API call fires only when user submits."""
     try:
@@ -414,3 +414,32 @@ async def analyze_ticker(
         if "credit balance is too low" in msg or "billing" in msg.lower():
             raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
         raise HTTPException(500, f"Ticker analysis failed: {e}")
+
+
+class _ChatMsg(BaseModel):
+    role: str
+    content: str
+
+class _ChatRequest(BaseModel):
+    question: str
+    history: list[_ChatMsg] = []
+    analysis_context: str = ""
+
+@router.post("/chat/{ticker}")
+async def chat_ticker(ticker: str, body: _ChatRequest):
+    """Answer a follow-up question about a ticker. No passcode required (per-call, low cost)."""
+    try:
+        result = await ai_service.chat_about_ticker(
+            ticker=ticker.upper().strip(),
+            question=body.question,
+            history=[{"role": m.role, "content": m.content} for m in body.history],
+            analysis_context=body.analysis_context,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        msg = str(e)
+        if "credit balance is too low" in msg or "billing" in msg.lower():
+            raise HTTPException(402, "🪙 The AI's coin jar is empty!")
+        raise HTTPException(500, f"Chat failed: {e}")

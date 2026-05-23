@@ -89,9 +89,15 @@ export const api = {
   aiRefresh: () => apiPicksFetch("/ai/refresh", { method: "POST" }),
   aiClearMode: (mode: string) => apiPicksFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
   analyzeTicker: (ticker: string, mode: "unified" | "long" | "discovery" = "unified") =>
-    apiPicksFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
+    apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string) =>
-    apiPicksFetch(`/ai/analyze-all/${encodeURIComponent(ticker)}`),
+    apiFetch(`/ai/analyze-all/${encodeURIComponent(ticker)}`),
+  aiChat: (ticker: string, question: string, history: {role: string; content: string}[], analysisContext = "") =>
+    apiFetch(`/ai/chat/${encodeURIComponent(ticker)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, history, analysis_context: analysisContext }),
+    }),
 
   // Simulator (shared state via backend SQLite)
   simulatorState: () => apiFetch("/simulator/state"),

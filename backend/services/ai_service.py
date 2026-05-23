@@ -2427,3 +2427,38 @@ Respond ONLY with valid JSON, no markdown:
     result["next_trading_day"] = "10-Year Horizon"
     result["theoretical"] = _compute_theoretical(el, eh, stop, tgt, investment=1000)
     return result
+
+
+# ─── Chat follow-up ───────────────────────────────────────────────────────────
+
+async def chat_about_ticker(
+    ticker: str,
+    question: str,
+    history: list,
+    analysis_context: str = "",
+) -> dict:
+    """Answer a follow-up question about a ticker using the prior analysis as context."""
+    system = f"""You are a knowledgeable stock analyst assistant helping with research on {ticker}.
+{f"Prior analysis summary:{chr(10)}{analysis_context}" if analysis_context else ""}
+
+Answer concisely and factually. Use plain text — no markdown headers or bullet overload.
+Focus on what matters for investment decisions. Keep responses under 250 words unless depth is needed."""
+
+    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": question})
+
+    loop = asyncio.get_running_loop()
+
+    def _call():
+        client = _get_client()
+        import anthropic
+        resp = client.messages.create(
+            model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+            max_tokens=600,
+            system=system,
+            messages=messages,
+        )
+        return resp.content[0].text.strip()
+
+    answer = await loop.run_in_executor(_executor, _call)
+    return {"ticker": ticker, "answer": answer}
