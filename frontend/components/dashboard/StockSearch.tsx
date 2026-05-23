@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice, formatMarketCap } from "@/lib/utils";
@@ -39,6 +39,76 @@ interface UnifiedAnalysis {
   catalyst: string;
   key_risk: string;
 }
+
+// ─── Inline markdown renderer ─────────────────────────────────────────────────
+
+function renderInline(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i} className="font-semibold text-zinc-100">{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
+}
+
+function MdMessage({ content }: { content: string }) {
+  const lines = content.split("\n");
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      // blank line → spacer if not at edges
+      if (nodes.length > 0 && i < lines.length - 1) {
+        nodes.push(<div key={`sp-${i}`} className="h-1.5" />);
+      }
+    } else if (/^[-•]\s/.test(trimmed)) {
+      // bullet list: collect consecutive bullet lines
+      const bullets: string[] = [];
+      while (i < lines.length && /^[-•]\s/.test(lines[i].trim())) {
+        bullets.push(lines[i].trim().replace(/^[-•]\s/, ""));
+        i++;
+      }
+      nodes.push(
+        <ul key={`ul-${i}`} className="space-y-1 pl-3">
+          {bullets.map((b, bi) => (
+            <li key={bi} className="flex gap-1.5">
+              <span className="text-zinc-600 shrink-0 mt-0.5">•</span>
+              <span>{renderInline(b)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    } else if (/^\d+\.\s/.test(trimmed)) {
+      // numbered list
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s/, ""));
+        i++;
+      }
+      nodes.push(
+        <ol key={`ol-${i}`} className="space-y-1 pl-3 list-decimal list-inside">
+          {items.map((item, ii) => (
+            <li key={ii}>{renderInline(item)}</li>
+          ))}
+        </ol>
+      );
+      continue;
+    } else {
+      nodes.push(<p key={`p-${i}`}>{renderInline(trimmed)}</p>);
+    }
+    i++;
+  }
+
+  return <div className="space-y-1 leading-relaxed">{nodes}</div>;
+}
+
+// ─── Recommendation badge ─────────────────────────────────────────────────────
 
 function RecBadge({ rec }: { rec: string }) {
   const cfg: Record<string, { cls: string; label: string }> = {
@@ -382,12 +452,14 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
                       <Bot size={10} className="text-cyan-400" />
                     </div>
                   )}
-                  <div className={`max-w-[88%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                  <div className={`max-w-[88%] rounded-xl px-3 py-2 text-xs ${
                     msg.role === "user"
-                      ? "bg-cyan-600/20 border border-cyan-700/30 text-cyan-100"
+                      ? "bg-cyan-600/20 border border-cyan-700/30 text-cyan-100 leading-relaxed"
                       : "bg-zinc-800 border border-zinc-700/40 text-zinc-200"
                   }`}>
-                    {msg.content}
+                    {msg.role === "assistant"
+                      ? <MdMessage content={msg.content} />
+                      : msg.content}
                   </div>
                   {msg.role === "user" && (
                     <div className="w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0 mt-0.5">
