@@ -201,8 +201,8 @@ async def _inner_generate_all_picks() -> dict:
         all_picks = mode_result.get("picks", [])
         trimmed[mode_key] = {
             **mode_result,
-            "picks": all_picks[:10],
-            "has_more": len(all_picks) > 10,
+            "picks": all_picks[:5],
+            "has_more": len(all_picks) > 5,
             "total_picks": len(all_picks),
         }
 
