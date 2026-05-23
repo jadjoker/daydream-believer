@@ -370,15 +370,21 @@ async def clear_mode_cache(mode: str, _: None = Depends(_require_passcode)):
 @router.get("/analyze-all/{ticker}")
 async def analyze_ticker_all(ticker: str):
     """Single-prompt analysis across all 3 horizons — 1 Claude call instead of 3."""
+    ticker = ticker.upper().strip()
+    cache_key = f"analyze_all:{ticker}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return cached
     try:
         now = datetime.now(pytz.timezone("US/Eastern"))
         next_trading_day_label, _ = _next_trading_day(now)
         market_data = await _build_market_snapshot()
         result = await ai_service.analyze_ticker_all_modes(
-            ticker=ticker.upper().strip(),
+            ticker=ticker,
             market_overview=market_data,
             next_trading_day_label=next_trading_day_label,
         )
+        set_cached(cache_key, result, ttl=3600)  # 1-hour cache — prices don't move thesis
         return result
     except ValueError as e:
         raise HTTPException(503, str(e))

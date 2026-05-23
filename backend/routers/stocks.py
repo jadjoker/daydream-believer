@@ -13,6 +13,7 @@ router = APIRouter(prefix="/stocks", tags=["stocks"])
 @cache(ttl=300, key_prefix="search")
 async def search_ticker(q: str = Query(..., min_length=1)):
     """Search by ticker symbol or company name via Yahoo Finance."""
+    q = q.upper().strip()
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             r = await client.get(

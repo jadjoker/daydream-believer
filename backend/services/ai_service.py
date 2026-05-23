@@ -661,7 +661,10 @@ def _call_claude(prompt: str, max_tokens: int = 1800) -> str:
     msg = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{
+            "role": "user",
+            "content": [{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}],
+        }],
     )
     return msg.content[0].text
 
@@ -2260,7 +2263,7 @@ Respond ONLY with valid JSON, no markdown:
 }}"""
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1600))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=900))
 
     try:
         parsed = _parse_response(raw)
@@ -2457,11 +2460,10 @@ async def chat_about_ticker(
 
     def _call():
         client = _get_client()
-        import anthropic
         resp = client.messages.create(
-            model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=600,
-            system=system,
+            model=os.getenv("AI_MODEL", "claude-haiku-4-5-20251001"),
+            max_tokens=450,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
         )
         return resp.content[0].text.strip()
