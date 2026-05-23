@@ -657,7 +657,7 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
 
 def _call_claude(prompt: str, max_tokens: int = 1800) -> str:
     client = _get_client()
-    model = os.getenv("AI_MODEL", "claude-haiku-4-5-20251001")
+    model = os.getenv("AI_MODEL", "claude-sonnet-4-6")
     msg = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -2461,7 +2461,7 @@ async def chat_about_ticker(
     def _call():
         client = _get_client()
         resp = client.messages.create(
-            model=os.getenv("AI_MODEL", "claude-haiku-4-5-20251001"),
+            model=os.getenv("AI_MODEL", "claude-sonnet-4-6"),
             max_tokens=450,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,

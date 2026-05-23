@@ -90,8 +90,8 @@ export const api = {
   aiClearMode: (mode: string) => apiPicksFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
   analyzeTicker: (ticker: string, mode: "unified" | "long" | "discovery" = "unified") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
-  analyzeTickerAll: (ticker: string) =>
-    apiFetch(`/ai/analyze-all/${encodeURIComponent(ticker)}`),
+  analyzeTickerAll: (ticker: string, refresh = false) =>
+    apiFetch(`/ai/analyze-all/${encodeURIComponent(ticker)}${refresh ? "?refresh=true" : ""}`),
   aiChat: (ticker: string, question: string, history: {role: string; content: string}[], analysisContext = "") =>
     apiFetch(`/ai/chat/${encodeURIComponent(ticker)}`, {
       method: "POST",

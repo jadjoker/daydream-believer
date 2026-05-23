@@ -217,13 +217,13 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [onTickerSelect]);
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = async (refresh = false) => {
     if (!selectedTicker || isAnalyzing) return;
     setIsAnalyzing(true);
-    setAnalysis(null);
-    setMessages([]);
+    if (refresh) setMessages([]);
+    else { setAnalysis(null); setMessages([]); }
     try {
-      const result = await api.analyzeTickerAll(selectedTicker) as any;
+      const result = await api.analyzeTickerAll(selectedTicker, refresh) as any;
       setAnalysis(result);
     } catch {
       setAnalysis({ ticker: selectedTicker });
@@ -398,7 +398,7 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
           {/* Action buttons */}
           <div className="flex gap-2">
             <button
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={isAnalyzing}
               className="flex-1 flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg transition-all duration-150"
             >
@@ -422,21 +422,31 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
       {/* ── Analysis card ─────────────────────────────────────────────────── */}
       {analysis?.unified && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-          <button
-            className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-800/30 active:bg-zinc-800/50 transition-colors border-b border-zinc-800 text-left"
-            onClick={() => setShowFullAnalysis(v => !v)}
-          >
-            <Sparkles size={12} className="text-cyan-400 shrink-0" />
-            <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
-              <RecBadge rec={analysis.unified.recommendation} />
-              <span className="text-xs text-zinc-400">{analysis.unified.hold_horizon}</span>
-              <span className="text-zinc-700 text-xs">·</span>
-              <span className="text-xs text-zinc-500">{analysis.unified.confidence}/10 confidence</span>
-            </div>
-            {showFullAnalysis
-              ? <ChevronUp size={14} className="text-zinc-600 shrink-0" />
-              : <ChevronDown size={14} className="text-zinc-600 shrink-0" />}
-          </button>
+          <div className="flex items-center border-b border-zinc-800">
+            <button
+              className="flex items-center gap-3 flex-1 px-4 py-3.5 hover:bg-zinc-800/30 active:bg-zinc-800/50 transition-colors text-left min-w-0"
+              onClick={() => setShowFullAnalysis(v => !v)}
+            >
+              <Sparkles size={12} className="text-cyan-400 shrink-0" />
+              <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
+                <RecBadge rec={analysis.unified.recommendation} />
+                <span className="text-xs text-zinc-400">{analysis.unified.hold_horizon}</span>
+                <span className="text-zinc-700 text-xs">·</span>
+                <span className="text-xs text-zinc-500">{analysis.unified.confidence}/10</span>
+              </div>
+              {showFullAnalysis
+                ? <ChevronUp size={14} className="text-zinc-600 shrink-0" />
+                : <ChevronDown size={14} className="text-zinc-600 shrink-0" />}
+            </button>
+            <button
+              onClick={e => { e.stopPropagation(); handleAnalyze(true); }}
+              disabled={isAnalyzing}
+              title="Refresh analysis"
+              className="px-3 py-3.5 text-zinc-600 hover:text-cyan-400 active:text-cyan-300 disabled:opacity-40 transition-colors border-l border-zinc-800 shrink-0"
+            >
+              <RotateCcw size={13} className={isAnalyzing ? "animate-spin" : ""} />
+            </button>
+          </div>
 
           {showFullAnalysis && (
             <div className="px-4 py-4 space-y-3">
