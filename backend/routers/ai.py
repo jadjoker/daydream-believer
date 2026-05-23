@@ -282,7 +282,7 @@ async def get_ai_picks(
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+            raise HTTPException(402, "Ya'll broke as hell")
         raise HTTPException(500, f"AI picks failed: {e}")
 
 
@@ -306,7 +306,7 @@ async def get_ai_picks_all(_: None = Depends(_require_passcode)):
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+            raise HTTPException(402, "Ya'll broke as hell")
         raise HTTPException(500, f"AI picks failed: {e}")
 
 
@@ -385,7 +385,7 @@ async def analyze_ticker_all(ticker: str):
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+            raise HTTPException(402, "Ya'll broke as hell")
         raise HTTPException(500, f"Ticker analysis failed: {e}")
 
 
@@ -412,7 +412,7 @@ async def analyze_ticker(
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "🪙 The AI's coin jar is empty! Claude tried to think but found tumbleweeds where the credits should be. Head to console.anthropic.com/settings/billing and toss in some tokens — the robot is hungry.")
+            raise HTTPException(402, "Ya'll broke as hell")
         raise HTTPException(500, f"Ticker analysis failed: {e}")
 
 
@@ -441,5 +441,5 @@ async def chat_ticker(ticker: str, body: _ChatRequest):
     except Exception as e:
         msg = str(e)
         if "credit balance is too low" in msg or "billing" in msg.lower():
-            raise HTTPException(402, "🪙 The AI's coin jar is empty!")
+            raise HTTPException(402, "Ya'll broke as hell")
         raise HTTPException(500, f"Chat failed: {e}")
