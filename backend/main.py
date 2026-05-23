@@ -12,14 +12,7 @@ from routers import stocks, sentiment, options, news, screener, insider, earning
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: pre-warm AI picks in the background if cache is cold.
-    # This way picks are ready (or nearly ready) by the time the first user arrives
-    # after a deploy — instead of the first user triggering the full 40-50s generation.
-    from services.cache_service import get_cached
-    if get_cached("ai_picks_all") is None:
-        asyncio.create_task(ai.background_refresh_picks())
-    yield
-    # Shutdown: nothing to clean up
+    yield  # picks are generated on-demand only, never pre-warmed on startup
 
 
 app = FastAPI(

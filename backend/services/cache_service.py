@@ -13,8 +13,8 @@ def get_cached(key: str) -> Optional[Any]:
     return _cache.get(key)
 
 
-def set_cached(key: str, value: Any, ttl: int = _DEFAULT_TTL):
-    _cache.set(key, value, expire=ttl)
+def set_cached(key: str, value: Any, ttl: Optional[int] = _DEFAULT_TTL):
+    _cache.set(key, value, expire=ttl)  # expire=None → never expires in diskcache
 
 
 def delete_cached(key: str):

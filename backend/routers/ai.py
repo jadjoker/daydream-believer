@@ -1,6 +1,7 @@
 import asyncio
+import os
 import time
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from services import ai_service
 from services.screener_service import run_screener
 from services import yahoo_finance as yf_svc
@@ -15,11 +16,19 @@ _REGIME_TICKERS = ["SPY", "QQQ", "IWM", "^VIX"]
 
 _snapshot_cache: dict = {"ts": 0.0, "data": None}
 _SNAPSHOT_TTL = 300   # 5 minutes
-_PICKS_TTL    = 86400 # 24 hours — picks survive the full trading day
+_PICKS_TTL    = None  # picks never expire — manual refresh only
 
-# Prevent duplicate concurrent generation (startup pre-warm vs first user request)
+# Prevent duplicate concurrent generation
 _picks_lock = asyncio.Lock()
 _is_generating: bool = False
+
+
+def _require_passcode(x_picks_passcode: str = Header(None)):
+    """FastAPI dependency: validates X-Picks-Passcode header against PICKS_PASSCODE env var.
+    If PICKS_PASSCODE is not set, all requests are allowed (dev/local mode)."""
+    passcode = os.getenv("PICKS_PASSCODE", "")
+    if passcode and x_picks_passcode != passcode:
+        raise HTTPException(status_code=401, detail="Invalid passcode")
 
 
 def _next_trading_day(now: datetime) -> tuple[str, str]:
@@ -188,9 +197,9 @@ async def _inner_generate_all_picks() -> dict:
 
     full = {"unified": unified_result, "bargain": bargain_result}
 
-    # Use short TTL if either section failed — don't lock in errors for 24h
+    # Retry in 5 min if either section is empty (generation error); otherwise cache forever
     any_empty = any(len(v.get("picks", [])) == 0 for v in full.values())
-    effective_ttl = 300 if any_empty else _PICKS_TTL
+    effective_ttl = 300 if any_empty else _PICKS_TTL  # None = never expires
 
     # Cache full pick sets for /picks-more/{mode}
     set_cached("ai_picks_all_full", full, ttl=effective_ttl)
@@ -232,8 +241,17 @@ async def background_refresh_picks():
         _is_generating = False
 
 
+@router.post("/verify-passcode")
+async def verify_passcode(_: None = Depends(_require_passcode)):
+    """Validates the X-Picks-Passcode header. Returns 200 if correct, 401 if not."""
+    return {"ok": True}
+
+
 @router.get("/picks")
-async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|bargain|long|discovery)$")):
+async def get_ai_picks(
+    mode: str = Query("unified", pattern="^(unified|bargain|long|discovery)$"),
+    _: None = Depends(_require_passcode),
+):
     cache_key = f"ai_picks_{mode}"
     cached = get_cached(cache_key)
     if cached is not None:
@@ -255,7 +273,6 @@ async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|bargain|l
         result["next_trading_day_label"] = "Long-Term Picks"
         result["next_trading_day_date"] = None
         result["mode"] = mode
-        # Don't lock in empty results for 24h — let retries regenerate
         effective_ttl = 300 if not result.get("picks") else _PICKS_TTL
         set_cached(cache_key, result, ttl=effective_ttl)
         return result
@@ -269,14 +286,8 @@ async def get_ai_picks(mode: str = Query("unified", pattern="^(unified|bargain|l
 
 
 @router.get("/picks-all")
-async def get_ai_picks_all():
-    """
-    Fetch short + long + discovery picks in one request.
-    Returns 5 picks per mode. Full 8-pick set cached for /picks-more/{mode}.
-
-    Uses an asyncio.Lock so the startup pre-warm and first user request
-    don't both fire Claude — whichever arrives second hits the cache.
-    """
+async def get_ai_picks_all(_: None = Depends(_require_passcode)):
+    """Fetch unified + bargain picks. Returns 5 per mode; full set cached for /picks-more/{mode}."""
     cached = get_cached("ai_picks_all")
     if cached is not None:
         return cached
@@ -299,12 +310,7 @@ async def get_ai_picks_all():
 
 
 @router.get("/picks-more/{mode}")
-async def get_ai_picks_more(mode: str):
-    """
-    Returns picks 6+ for a mode from the cached full result.
-    Must call /picks-all first to populate the cache.
-    Instant response — no Claude call needed.
-    """
+async def get_ai_picks_more(mode: str, _: None = Depends(_require_passcode)):
     if mode not in ("unified", "bargain", "long", "discovery"):
         raise HTTPException(400, "mode must be unified, bargain, long, or discovery")
     full = get_cached("ai_picks_all_full")
@@ -319,8 +325,7 @@ async def get_ai_picks_more(mode: str):
 
 
 @router.get("/picks-status")
-async def get_ai_picks_status():
-    """Returns whether picks exist and if a background generation is in progress."""
+async def get_ai_picks_status(_: None = Depends(_require_passcode)):
     cached = get_cached("ai_picks_all")
     has_picks = cached is not None
     generated_at = None
@@ -338,7 +343,7 @@ async def get_ai_picks_status():
 
 
 @router.post("/refresh")
-async def refresh_ai_picks():
+async def refresh_ai_picks(_: None = Depends(_require_passcode)):
     """
     Clear the picks cache and fire a background regeneration.
     Returns immediately — frontend can poll /ai/picks-status or just call /ai/picks-all
@@ -353,7 +358,7 @@ async def refresh_ai_picks():
 
 
 @router.post("/clear-mode/{mode}")
-async def clear_mode_cache(mode: str):
+async def clear_mode_cache(mode: str, _: None = Depends(_require_passcode)):
     """Delete cached picks for a single mode so the next /picks?mode= call regenerates."""
     if mode not in ("unified", "bargain", "long", "discovery"):
         raise HTTPException(400, "Invalid mode")
@@ -362,7 +367,7 @@ async def clear_mode_cache(mode: str):
 
 
 @router.get("/analyze-all/{ticker}")
-async def analyze_ticker_all(ticker: str):
+async def analyze_ticker_all(ticker: str, _: None = Depends(_require_passcode)):
     """Single-prompt analysis across all 3 horizons — 1 Claude call instead of 3."""
     try:
         now = datetime.now(pytz.timezone("US/Eastern"))
@@ -384,7 +389,11 @@ async def analyze_ticker_all(ticker: str):
 
 
 @router.get("/analyze/{ticker}")
-async def analyze_ticker(ticker: str, mode: str = Query("short", pattern="^(short|long|discovery)$")):
+async def analyze_ticker(
+    ticker: str,
+    mode: str = Query("short", pattern="^(short|long|discovery)$"),
+    _: None = Depends(_require_passcode),
+):
     """Analyze a single ticker on demand. API call fires only when user submits."""
     try:
         now = datetime.now(pytz.timezone("US/Eastern"))
