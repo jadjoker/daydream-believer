@@ -270,13 +270,13 @@ function renderError(error: string) {
 
 // ─── Category filter ──────────────────────────────────────────────────────────
 
-type CategoryFilter = "all" | "long_term" | "bargain" | "unknown";
+type CategoryFilter = "all" | "long_term" | "bargain" | "hidden_gem";
 
 const CATEGORY_TABS: { key: CategoryFilter; label: string }[] = [
-  { key: "all",       label: "All" },
-  { key: "long_term", label: "Long Term" },
-  { key: "bargain",   label: "Bargain" },
-  { key: "unknown",   label: "Unknowns" },
+  { key: "all",        label: "All" },
+  { key: "long_term",  label: "Long Term" },
+  { key: "bargain",    label: "Bargain" },
+  { key: "hidden_gem", label: "Hidden Gems" },
 ];
 
 // ─── Picks panel ──────────────────────────────────────────────────────────────
@@ -301,10 +301,10 @@ function PicksPanel({
   const allPicks: any[] = modeData?.picks ?? [];
 
   const categoryCounts: Record<CategoryFilter, number> = {
-    all:       allPicks.length,
-    long_term: allPicks.filter((p: any) => p.category === "long_term").length,
-    bargain:   allPicks.filter((p: any) => p.category === "bargain").length,
-    unknown:   allPicks.filter((p: any) => p.category === "unknown").length,
+    all:        allPicks.length,
+    long_term:  allPicks.filter((p: any) => p.category === "long_term").length,
+    bargain:    allPicks.filter((p: any) => p.category === "bargain").length,
+    hidden_gem: allPicks.filter((p: any) => p.category === "hidden_gem").length,
   };
 
   const filteredPicks = categoryFilter === "all"
@@ -334,7 +334,6 @@ function PicksPanel({
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 gap-3 flex-wrap">
         <div className="flex items-center gap-2 shrink-0">
           <span className="font-semibold text-sm text-cyan-400">Pick List</span>
-          <span className="text-[10px] text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">long-term quality</span>
           {allPicks.length > 0 && !isLoading && (
             <span className="text-[10px] text-zinc-600">{allPicks.length} picks</span>
           )}
@@ -410,7 +409,7 @@ function PicksPanel({
                         {pick.category === "bargain" && (
                           <span className="text-[9px] px-1.5 py-0.5 rounded border bg-emerald-500/10 border-emerald-600/30 text-emerald-400 shrink-0 hidden sm:inline">Bargain</span>
                         )}
-                        {pick.category === "unknown" && (
+                        {pick.category === "hidden_gem" && (
                           <span className="text-[9px] px-1.5 py-0.5 rounded border bg-violet-500/10 border-violet-600/30 text-violet-400 shrink-0 hidden sm:inline">Hidden Gem</span>
                         )}
                         <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>

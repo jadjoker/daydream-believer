@@ -649,8 +649,7 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
         }
         if p.get("hold_horizon"):
             pick["hold_horizon"] = p["hold_horizon"]
-        if p.get("category"):
-            pick["category"] = p["category"]
+        pick["category"] = p.get("category") or c.get("hint_category", "long_term")
         cleaned.append(pick)
     return cleaned
 
@@ -710,7 +709,7 @@ async def generate_market_picks(
             lt_cands, bg_cands, un_cands = await asyncio.gather(
                 screen_longterm_candidates(top_n=5,  earnings_lookup=earnings_lookup),
                 screen_bargain_candidates(top_n=4,   earnings_lookup=earnings_lookup),
-                screen_unknowns_candidates(top_n=4,  earnings_lookup=earnings_lookup),
+                screen_unknowns_candidates(top_n=5,  earnings_lookup=earnings_lookup),
                 return_exceptions=True,
             )
         except Exception:
@@ -722,7 +721,7 @@ async def generate_market_picks(
 
         for c in lt: c["hint_category"] = "long_term"
         for c in bg: c["hint_category"] = "bargain"
-        for c in un: c["hint_category"] = "unknown"
+        for c in un: c["hint_category"] = "hidden_gem"
 
         candidates = lt + bg + un
         if not candidates:
@@ -1797,71 +1796,74 @@ Respond ONLY with valid JSON, no markdown:
 # Distinct from the main growth universe; scoring favors value metrics.
 
 BARGAIN_UNIVERSE: List[tuple] = [
-    # ── Beaten-down fintech / payments ───────────────────────────────────────
-    ("PYPL",  "fintech"),    # PayPal — cheap P/E, large network
-    ("WU",    "fintech"),    # Western Union — ultra cheap, high dividend
-    # ── Value platforms ───────────────────────────────────────────────────────
-    ("PINS",  "platform"),   # Pinterest — cheap P/S, monetization runway
-    ("SNAP",  "platform"),   # Snapchat — cheap, improving margins
-    ("BABA",  "platform"),   # Alibaba — ultra cheap, China risk
-    # ── Cheap semiconductors ──────────────────────────────────────────────────
-    ("MU",    "deeptech"),   # Micron — cyclical, strong long-term
-    ("INTC",  "deeptech"),   # Intel — turnaround, very cheap P/E
-    ("WDC",   "deeptech"),   # Western Digital — cheap storage play
-    # ── Telecom / dividend compounders ───────────────────────────────────────
-    ("T",     "financial"),  # AT&T — cheap, high yield post-delever
-    ("VZ",    "financial"),  # Verizon — cheap, massive dividend
-    # ── Value financials ──────────────────────────────────────────────────────
-    ("WFC",   "financial"),  # Wells Fargo — cheap P/B, improving ROE
-    ("C",     "financial"),  # Citigroup — cheap P/B, restructuring
-    ("MS",    "financial"),  # Morgan Stanley — quality at discount
-    ("USB",   "financial"),  # US Bancorp — consistent, cheap
-    # ── Value consumer ────────────────────────────────────────────────────────
-    ("F",     "consumer"),   # Ford — single-digit P/E, dividend
-    ("GM",    "consumer"),   # General Motors — very cheap P/E
-    ("MO",    "consumer"),   # Altria — ultra high dividend compounder
-    ("KHC",   "consumer"),   # Kraft Heinz — cheap, restructuring
-    # ── Beaten-down healthcare ────────────────────────────────────────────────
-    ("CVS",   "healthcare"), # CVS — cheap, integrating Aetna
-    ("HUM",   "healthcare"), # Humana — beaten down near 52-wk low
-    ("BMY",   "healthcare"), # Bristol-Myers — cheap, LOE concerns priced in
-    ("CI",    "healthcare"), # Cigna — cheap P/E, capital return
-    # ── Value industrials ────────────────────────────────────────────────────
-    ("BA",    "industrial"), # Boeing — deep turnaround
-    ("RTX",   "industrial"), # RTX — defense, cheap vs peers
-    # ── Value energy ──────────────────────────────────────────────────────────
-    ("OXY",   "energy"),     # Occidental — Berkshire backed
-    ("BP",    "energy"),     # BP — cheap vs US energy peers
-    # ── Cheap software / SaaS ─────────────────────────────────────────────────
-    ("PATH",  "saas"),       # UiPath — cheap for automation SaaS
-    ("GTLB",  "saas"),       # GitLab — below SaaS peer multiples
+    # ── Digital banks & fintech ──────────────────────────────────────────────
+    ("SOFI",  "fintech"),    # SoFi — digital bank, strong member + revenue growth
+    ("NU",    "fintech"),    # Nu Holdings — fastest-growing LatAm fintech
+    ("PAYO",  "fintech"),    # Payoneer — B2B cross-border payments platform
+    ("GDOT",  "fintech"),    # Green Dot — banking-as-a-service, steady FCF
+    # ── Tech & software ─────────────────────────────────────────────────────
+    ("SNAP",  "platform"),   # Snap — social media, improving margins + ARPU
+    ("PATH",  "saas"),       # UiPath — automation SaaS, strong ARR
+    ("FRSH",  "saas"),       # Freshworks — CRM/support SaaS, growing SMB base
+    ("CLBT",  "saas"),       # Cellebrite — digital intelligence SaaS, gov contracts
+    # ── AI & frontier tech ──────────────────────────────────────────────────
+    ("SOUN",  "deeptech"),   # SoundHound — voice AI, licensing model, growing RPO
+    ("IONQ",  "deeptech"),   # IonQ — quantum computing leader, DoD contracts
+    ("JOBY",  "deeptech"),   # Joby Aviation — FAA-approved eVTOL, Toyota-backed
+    # ── Telecom & infrastructure ─────────────────────────────────────────────
+    ("ERIC",  "platform"),   # Ericsson — 5G global leader, cheap vs AT&T/VZ
+    ("NOK",   "deeptech"),   # Nokia — 5G IP portfolio, network infrastructure
+    # ── Auto ─────────────────────────────────────────────────────────────────
+    ("F",     "consumer"),   # Ford — EV pivot, single-digit P/E, dividend
+    # ── Healthcare ───────────────────────────────────────────────────────────
+    ("FTRE",  "healthcare"), # Fortrea — CRO spun from LabCorp, growing backlog
+    ("MDXG",  "healthcare"), # MiMedx — regenerative medicine, improving margins
+    # ── Industrial & energy ──────────────────────────────────────────────────
+    ("LBRT",  "industrial"), # Liberty Energy — oilfield services, FCF-positive
+    # ── Consumer & retail ────────────────────────────────────────────────────
+    ("PARA",  "consumer"),   # Paramount — Skydance deal, streaming + IP library
+    ("KSS",   "consumer"),   # Kohl's — deep discount retailer, strong FCF
+    ("WBA",   "consumer"),   # Walgreens — turnaround, pharmacy network moat
+    # ── Business services ────────────────────────────────────────────────────
+    ("TASK",  "platform"),   # TaskUs — AI-enabled BPO, growing enterprise contracts
+    ("CTLP",  "fintech"),    # Cantaloupe — unattended retail IoT, growing SaaS rev
 ]
 
 BARGAIN_MODEL: Dict[str, str] = {t: m for t, m in BARGAIN_UNIVERSE}
 
 
-# ─── Unknowns universe ───────────────────────────────────────────────────────
+# ─── Hidden Gems universe ────────────────────────────────────────────────────
 #
-# Less-followed small/mid-cap businesses with genuine investment merit.
-# Low analyst coverage (< 8 ratings typical) makes these "unknowns" to
-# most retail investors while still having real fundamentals to evaluate.
+# Quality small/mid-cap businesses with low retail coverage. Under-the-radar
+# compounders and innovators that most retail investors have never heard of.
 
-UNKNOWNS_UNIVERSE: List[tuple] = [
-    ("FROG",  "saas"),        # JFrog — DevOps artifact management
-    ("CFLT",  "saas"),        # Confluent — enterprise data streaming
-    ("FLYW",  "fintech"),     # Flywire — vertical payment software
-    ("WK",    "saas"),        # Workiva — financial reporting SaaS
-    ("TASK",  "platform"),    # TaskUs — digital business services
-    ("PAYO",  "fintech"),     # Payoneer — cross-border B2B payments
-    ("ACMR",  "deeptech"),    # ACM Research — semiconductor equipment
-    ("SMTC",  "deeptech"),    # Semtech — IoT connectivity chips
-    ("AMBA",  "deeptech"),    # Ambarella — edge AI chips
-    ("PRCT",  "healthcare"),  # Procept BioRobotics — surgical robotics
-    ("AAON",  "industrial"),  # AAON Inc — HVAC systems, profitable
-    ("CRVL",  "financial"),   # CorVel Corp — risk management services
+HIDDEN_GEMS_UNIVERSE: List[tuple] = [
+    # ── DevOps & data infrastructure ────────────────────────────────────────
+    ("FROG",  "saas"),        # JFrog — universal artifact management SaaS
+    ("CFLT",  "saas"),        # Confluent — real-time data streaming platform
+    ("WK",    "saas"),        # Workiva — financial reporting & compliance SaaS
+    # ── Semiconductor & hardware ─────────────────────────────────────────────
+    ("ACMR",  "deeptech"),    # ACM Research — advanced wafer cleaning equipment
+    ("SMTC",  "deeptech"),    # Semtech — LoRa IoT connectivity chips
+    ("ALGM",  "deeptech"),    # Allegro MicroSystems — sensing + power ICs
+    ("COHU",  "deeptech"),    # Cohu — semiconductor test handlers
+    ("AMBA",  "deeptech"),    # Ambarella — edge AI video processing chips
+    # ── Vertical fintech ────────────────────────────────────────────────────
+    ("FLYW",  "fintech"),     # Flywire — vertical payment software (edu/health)
+    # ── Healthcare innovations ───────────────────────────────────────────────
+    ("PRCT",  "healthcare"),  # Procept BioRobotics — robotic prostate surgery
+    ("NVST",  "healthcare"),  # Envista Holdings — dental equipment + consumables
+    ("LMAT",  "healthcare"),  # LeMaitre Vascular — specialty surgical devices
+    # ── Durable compounders ──────────────────────────────────────────────────
+    ("AAON",  "industrial"),  # AAON Inc — HVAC manufacturer, 20%+ margins
+    ("CRVL",  "financial"),   # CorVel Corp — risk management, 40-yr track record
+    # ── SMB & mid-market SaaS ────────────────────────────────────────────────
+    ("JAMF",  "saas"),        # JAMF Holding — Apple device management platform
+    ("WEAV",  "saas"),        # Weave Communications — patient/SMB comms SaaS
 ]
 
-UNKNOWNS_MODEL: Dict[str, str] = {t: m for t, m in UNKNOWNS_UNIVERSE}
+UNKNOWNS_UNIVERSE  = HIDDEN_GEMS_UNIVERSE   # alias used in screener
+UNKNOWNS_MODEL: Dict[str, str] = {t: m for t, m in HIDDEN_GEMS_UNIVERSE}
 
 
 async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = None) -> List[Dict]:
@@ -2022,11 +2024,11 @@ async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = Non
         q = quote if isinstance(quote, dict) else {}
         f = fund if isinstance(fund, dict) else {}
         price = q.get("price") or 0
-        if not price:
+        if not price or not (5.0 <= price <= 20.0):
             continue
 
         model = BARGAIN_MODEL.get(ticker, "")
-        score = _score_bargain(f, price, model)
+        score = _score_longterm(f, price, model)
 
         # High short interest on a value stock can signal contrarian opportunity or value trap
         short_float = q.get("short_float")
@@ -2203,7 +2205,7 @@ def _build_unified_prompt(
     market_overview: Dict,
     date_str: str,
 ) -> str:
-    cat_label_map = {"long_term": "LONG-TERM", "bargain": "BARGAIN", "unknown": "UNKNOWN"}
+    cat_label_map = {"long_term": "LONG-TERM", "bargain": "BARGAIN", "hidden_gem": "HIDDEN GEM"}
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
@@ -2245,8 +2247,8 @@ TICKER IDENTITY — verify before writing any thesis:
 
 CATEGORIES in this candidate pool:
 - LONG-TERM: quality compounders, strong fundamentals, established businesses
-- BARGAIN: undervalued stocks — good business at cheap price or valuation
-- UNKNOWN: less-followed small/mid-cap with investment merit; few analyst ratings
+- BARGAIN: quality stocks priced $5–$20/share — real businesses at accessible prices
+- HIDDEN GEM: under-the-radar small/mid-cap; low retail coverage but strong fundamentals
 
 MACRO: {macro_block}
 
@@ -2254,7 +2256,7 @@ MACRO: {macro_block}
 {candidates_block}
 
 === YOUR JOB ===
-1. Select best picks: 2–3 LONG-TERM, 2–3 BARGAIN, 1–2 UNKNOWN (total 5–8)
+1. Select best picks: 2–3 LONG-TERM, 2–3 BARGAIN, 2–3 HIDDEN GEM (total 6–9)
 2. Assign matching category to each pick
 3. Use suggested entry zone; calibrate stop/target to conviction level
 4. trade_type: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
@@ -2271,7 +2273,7 @@ Respond ONLY with valid JSON, no markdown:
     {{
       "rank": 1,
       "ticker": "MSFT",
-      "category": "long_term",
+      "category": "long_term",  // long_term | bargain | hidden_gem
       "trade_type": "compounder",
       "entry_low": 420.00,
       "entry_high": 432.00,
