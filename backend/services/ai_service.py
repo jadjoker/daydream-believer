@@ -2285,7 +2285,7 @@ Respond ONLY with valid JSON, no markdown:
     }}
   ],
   "generated_at": "{date_str}"
-}}
+}}"""
 
 
 # ─── Combined all-modes single-ticker analysis ───────────────────────────────
