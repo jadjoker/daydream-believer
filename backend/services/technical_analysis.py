@@ -259,4 +259,12 @@ def analyze(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional[
 
 
 async def get_technical_signals(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional[Dict]:
-    return await _run_sync(analyze, ticker, period, interval)
+    from services.cache_service import get_cached, set_cached
+    _key = f"ta_signals:{ticker.upper()}:{period}:{interval}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
+    result = await _run_sync(analyze, ticker, period, interval)
+    if result is not None:
+        set_cached(_key, result, ttl=3600)
+    return result

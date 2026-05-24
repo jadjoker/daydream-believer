@@ -681,6 +681,14 @@ async def generate_market_picks(
         candidates = lt + bg + un
         if not candidates:
             return {"error": "No candidates", "picks": [], "bias": "neutral", "generated_at": date_str}
+        try:
+            enriched = await asyncio.wait_for(
+                _enrich_candidates(candidates, earnings_lookup),
+                timeout=120.0,
+            )
+            candidates = enriched
+        except Exception:
+            pass  # proceed with raw fundamentals if enrich times out or fails
         prompt = _build_unified_prompt(candidates, market_overview, date_str)
     elif mode == "long":
         try:
@@ -1009,7 +1017,7 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
 
 async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = None) -> List[Dict]:
     from services.cache_service import get_cached, set_cached
-    _ck = "screener:longterm"
+    _ck = "screener:longterm_v2"
     cached = get_cached(_ck)
     if cached is not None:
         _longterm_cache["ts"] = time.time()
@@ -1113,16 +1121,10 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
 
-    # Enrich top candidates with full data pipeline
-    top = candidates[:max(top_n + 2, 8)]
-    top = await _enrich_candidates(top, earnings_lookup)
-    top.sort(key=lambda x: x["score"], reverse=True)
-
-    full_list = top + candidates[len(top):]
     _longterm_cache["ts"] = time.time()
-    _longterm_cache["data"] = full_list
-    set_cached("screener:longterm", full_list, ttl=86400)
-    return top[:top_n]
+    _longterm_cache["data"] = candidates
+    set_cached("screener:longterm_v2", candidates, ttl=86400)
+    return candidates[:top_n]
 
 
 # ─── Long-term prompt builder ─────────────────────────────────────────────────
@@ -1829,7 +1831,7 @@ UNKNOWNS_MODEL: Dict[str, str] = {t: m for t, m in HIDDEN_GEMS_UNIVERSE}
 
 async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = None) -> List[Dict]:
     from services.cache_service import get_cached, set_cached
-    _ck = "screener:hidden_gems"
+    _ck = "screener:hidden_gems_v2"
     cached = get_cached(_ck)
     if cached is not None:
         _unknowns_cache["ts"] = time.time()
@@ -1885,15 +1887,11 @@ async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = Non
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    top = candidates[:max(top_n + 2, 7)]
-    top = await _enrich_candidates(top, earnings_lookup)
-    top.sort(key=lambda x: x["score"], reverse=True)
 
-    full_list = top + candidates[len(top):]
     _unknowns_cache["ts"] = time.time()
-    _unknowns_cache["data"] = full_list
-    set_cached("screener:hidden_gems", full_list, ttl=86400)
-    return top[:top_n]
+    _unknowns_cache["data"] = candidates
+    set_cached("screener:hidden_gems_v2", candidates, ttl=86400)
+    return candidates[:top_n]
 
 
 # ─── Bargain scoring ─────────────────────────────────────────────────────────
@@ -1975,7 +1973,7 @@ def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
 
 async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = None) -> List[Dict]:
     from services.cache_service import get_cached, set_cached
-    _ck = "screener:bargain"
+    _ck = "screener:bargain_v2"
     cached = get_cached(_ck)
     if cached is not None:
         _bargain_cache["ts"] = time.time()
@@ -2043,16 +2041,10 @@ async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = Non
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
 
-    # Enrich top candidates with analyst consensus + insider signal + earnings date
-    top = candidates[:max(top_n + 2, 8)]
-    top = await _enrich_candidates(top, earnings_lookup)
-    top.sort(key=lambda x: x["score"], reverse=True)
-
-    full_list = top + candidates[len(top):]
     _bargain_cache["ts"] = time.time()
-    _bargain_cache["data"] = full_list
-    set_cached("screener:bargain", full_list, ttl=86400)
-    return top[:top_n]
+    _bargain_cache["data"] = candidates
+    set_cached("screener:bargain_v2", candidates, ttl=86400)
+    return candidates[:top_n]
 
 
 # ─── Bargain prompt builder ───────────────────────────────────────────────────
