@@ -705,22 +705,13 @@ async def generate_market_picks(
 
     if mode == "unified":
         try:
-            candidates = await screen_longterm_candidates(top_n=16, earnings_lookup=earnings_lookup)
+            candidates = await screen_longterm_candidates(top_n=5, earnings_lookup=earnings_lookup)
         except Exception:
             candidates = []
         if not candidates:
             return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
                     "bias": "neutral", "generated_at": date_str}
         prompt = _build_unified_prompt(candidates, market_overview, date_str)
-    elif mode == "bargain":
-        try:
-            candidates = await screen_bargain_candidates(top_n=14, earnings_lookup=earnings_lookup)
-        except Exception:
-            candidates = []
-        if not candidates:
-            return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
-                    "bias": "neutral", "generated_at": date_str}
-        prompt = _build_bargain_prompt(candidates, market_overview, date_str)
     elif mode == "long":
         try:
             candidates = await screen_longterm_candidates(top_n=10, earnings_lookup=earnings_lookup)
@@ -747,8 +738,7 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    # unified asks for 10-14 picks (~200 tokens each) — needs more headroom than bargain
-    tokens = 5000 if mode == "unified" else (3200 if mode in ("long", "discovery", "bargain") else 1800)
+    tokens = 2500 if mode == "unified" else (3200 if mode in ("long", "discovery") else 1800)
 
     for attempt in range(2):
         raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
@@ -2072,7 +2062,7 @@ Every pick's thesis must reference ONLY the company matched to that ticker above
 {candidates_block}
 
 === YOUR JOB ===
-1. Select 10–14 of the best candidates — spread across at least 2 different hold_horizon values
+1. Select all 5 candidates — spread across at least 2 different hold_horizon values
 2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
 3. Set price levels: use the suggested technical entry zone shown above; adjust stop and target to match the horizon ranges. Stop must be BELOW entry.
 4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative

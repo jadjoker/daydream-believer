@@ -121,8 +121,6 @@ function RecBadge({ rec }: { rec: string }) {
   );
 }
 
-const POPULAR = ["AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN", "SPY", "QQQ"];
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function StockSearch({ onTickerSelect }: StockSearchProps) {
@@ -326,21 +324,6 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
           </div>
         )}
       </div>
-
-      {/* Quick-pick chips — only when nothing selected */}
-      {!selectedTicker && (
-        <div className="flex flex-wrap gap-1.5">
-          {POPULAR.map(t => (
-            <button
-              key={t}
-              onClick={() => selectTicker(t)}
-              className="text-xs px-3 py-1.5 rounded-md border border-zinc-700/60 bg-zinc-800/50 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 hover:border-zinc-600 active:bg-zinc-700 transition-colors"
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* ── Selected stock card ───────────────────────────────────────────── */}
       {selectedTicker && (
@@ -582,7 +565,6 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
             <Search size={17} className="text-zinc-600" />
           </div>
           <p className="text-sm text-zinc-500">Search for any stock or ETF</p>
-          <p className="text-xs text-zinc-700 mt-1">Chart updates as you select</p>
         </div>
       )}
     </div>

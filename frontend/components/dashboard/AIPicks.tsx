@@ -802,18 +802,6 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
         onSimulate={onSimulate}
       />
 
-      {/* Bargain Buys */}
-      <PicksPanel
-        mode="bargain"
-        label="Bargain Buys"
-        description="value & undervalued"
-        accentCls="text-emerald-400"
-        data={allData?.bargain}
-        loading={loading}
-        onTickerSelect={onTickerSelect}
-        onSimulate={onSimulate}
-      />
-
       <p className="text-[10px] text-zinc-700 italic px-1">
         AI-generated for simulation purposes only. Not financial advice. Always verify independently.
       </p>
