@@ -140,13 +140,6 @@ async def _inner_generate_all_picks() -> dict:
     # Phase 1: market snapshot (cached 5 min, only 4 calls)
     market_data = await _build_market_snapshot()
 
-    # Phase 2: pre-warm screening cache
-    earnings_lookup = market_data.get("earnings_lookup") or {}
-    try:
-        await ai_service.screen_longterm_candidates(top_n=5, earnings_lookup=earnings_lookup)
-    except Exception:
-        pass
-
     def _error_result() -> dict:
         return {
             "picks": [], "market_summary": "Analysis temporarily unavailable.",
