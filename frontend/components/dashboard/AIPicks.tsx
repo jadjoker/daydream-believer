@@ -6,9 +6,7 @@ import { formatPrice } from "@/lib/utils";
 import {
   Sparkles, RefreshCw,
   ShieldAlert, Target, ArrowRight, AlertTriangle,
-  Search, CheckCircle, XCircle, MinusCircle,
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Tag,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
 import { MetricTooltip } from "./MetricTooltip";
 
@@ -28,12 +26,6 @@ const TRADE_TYPE_COLORS: Record<string, string> = {
   "deep-tech":"bg-violet-500/15 text-violet-300 border-violet-500/30",
   speculative:"bg-rose-500/15 text-rose-300 border-rose-500/30",
   momentum:   "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
-};
-
-const REC_CONFIG: Record<string, { icon: React.ReactNode; cls: string; bg: string; label: string }> = {
-  buy:   { icon: <CheckCircle size={14} />, cls: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/30", label: "BUY" },
-  hold:  { icon: <MinusCircle size={14} />, cls: "text-yellow-400",  bg: "bg-yellow-500/10 border-yellow-500/30",  label: "HOLD" },
-  avoid: { icon: <XCircle size={14} />,    cls: "text-red-400",      bg: "bg-red-500/10 border-red-500/30",        label: "AVOID" },
 };
 
 export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
@@ -249,79 +241,6 @@ function PickCard({ pick, onSelect, onSimulate }: { pick: any; onSelect: () => v
   );
 }
 
-// ─── Ticker analysis card ─────────────────────────────────────────────────────
-
-function TickerAnalysisCard({ analysis, onSelect, onSimulate }: { analysis: any; onSelect: () => void; onSimulate?: () => void }) {
-  const [calcOpen, setCalcOpen] = useState(false);
-  const rec = analysis.recommendation?.toLowerCase() as "buy" | "hold" | "avoid";
-  const recConf = REC_CONFIG[rec] ?? REC_CONFIG.hold;
-  const confidenceColor =
-    analysis.confidence >= 8 ? "text-emerald-400" : analysis.confidence >= 6 ? "text-yellow-400" : "text-red-400";
-
-  return (
-    <div className={`rounded-xl border overflow-hidden ${recConf.bg.replace("border-", "border-")}`}>
-      <div className={`flex items-center justify-between px-4 py-3 border-b border-zinc-800/60 ${recConf.bg}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">{analysis.ticker}</button>
-          <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${recConf.bg} ${recConf.cls}`}>
-            {recConf.icon} {recConf.label}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center text-sm font-bold tabular-nums ${confidenceColor}`}>
-            {analysis.confidence}/10
-            <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
-            <MetricTooltip term="Confidence" />
-          </div>
-          <button
-            onClick={() => setCalcOpen((o) => !o)}
-            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-lg transition-colors ${
-              calcOpen ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-400" : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-cyan-400 hover:border-cyan-800"
-            }`}
-          >
-            $ Returns {calcOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-          </button>
-        </div>
-      </div>
-      <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800 bg-zinc-900/60">
-        <PriceTile label="Entry Zone" value={`${formatPrice(analysis.entry_low)} – ${formatPrice(analysis.entry_high)}`} className="text-zinc-200" />
-        <PriceTile label="Stop Loss" value={formatPrice(analysis.stop_loss)} className="text-red-400" />
-        <PriceTile label="Target" value={formatPrice(analysis.target)} className="text-emerald-400" />
-        <PriceTile label="Risk/Reward" value={analysis.risk_reward || "—"} className="text-cyan-400" />
-      </div>
-      <div className="px-4 py-1.5 bg-zinc-900/40 border-t border-zinc-800/40">
-        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${analysis.confidence >= 8 ? "bg-emerald-500" : analysis.confidence >= 6 ? "bg-yellow-500" : "bg-red-500"}`}
-            style={{ width: `${(analysis.confidence / 10) * 100}%` }}
-          />
-        </div>
-      </div>
-      <div className="px-4 pt-3 pb-2 bg-zinc-900/40">
-        <p className="text-sm text-zinc-400 leading-relaxed">{analysis.thesis}</p>
-        <p className="text-[10px] text-zinc-600 italic mt-2">Long-term analysis · not financial advice</p>
-      </div>
-      {(analysis.catalyst || analysis.key_risk) && (
-        <div className="px-4 pb-3 bg-zinc-900/40 space-y-1">
-          {analysis.catalyst && (
-            <div className="flex items-start gap-1.5">
-              <Target size={10} className="text-cyan-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.catalyst}</p>
-            </div>
-          )}
-          {analysis.key_risk && (
-            <div className="flex items-start gap-1.5">
-              <ShieldAlert size={10} className="text-amber-500/80 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-zinc-500 leading-snug">{analysis.key_risk}</p>
-            </div>
-          )}
-        </div>
-      )}
-      {calcOpen && <InvestmentCalculator pick={analysis} onSimulate={onSimulate} />}
-    </div>
-  );
-}
-
 // ─── Error renderer ───────────────────────────────────────────────────────────
 
 function renderError(error: string) {
@@ -330,7 +249,7 @@ function renderError(error: string) {
     <div className="px-4 py-3">
       {isNoCredits ? (
         <div className="rounded-lg border border-amber-700/40 bg-amber-950/20 px-3 py-2 space-y-1">
-          <p className="text-xs text-amber-300 font-semibold">🪙 Out of AI Credits</p>
+          <p className="text-xs text-amber-300 font-semibold">Out of AI Credits</p>
           <p className="text-xs text-amber-200/70">{error}</p>
           <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer"
             className="text-xs text-amber-400 underline underline-offset-2 hover:text-amber-300">
@@ -349,69 +268,60 @@ function renderError(error: string) {
   );
 }
 
-// ─── Reusable picks panel ─────────────────────────────────────────────────────
+// ─── Category filter ──────────────────────────────────────────────────────────
+
+type CategoryFilter = "all" | "long_term" | "bargain" | "unknown";
+
+const CATEGORY_TABS: { key: CategoryFilter; label: string }[] = [
+  { key: "all",       label: "All" },
+  { key: "long_term", label: "Long Term" },
+  { key: "bargain",   label: "Bargain" },
+  { key: "unknown",   label: "Unknowns" },
+];
+
+// ─── Picks panel ──────────────────────────────────────────────────────────────
 
 function PicksPanel({
-  mode,
-  label,
-  description,
-  accentCls,
   data,
   loading,
   onTickerSelect,
   onSimulate,
 }: {
-  mode: "unified" | "bargain";
-  label: string;
-  description: string;
-  accentCls: string;
   data: any;
   loading: boolean;
   onTickerSelect: (t: string) => void;
   onSimulate?: (t: string) => void;
 }) {
-  const [page, setPage] = useState(0);
-  const [page1Picks, setPage1Picks] = useState<any[]>([]);
-  const [loadingPage1, setLoadingPage1] = useState(false);
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [override, setOverride] = useState<any>(null);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
 
   const modeData = override ?? data;
-  const page0Picks: any[] = modeData?.picks ?? [];
-  const hasPage1 = modeData?.has_more ?? false;
-  const totalPages = hasPage1 || page1Picks.length > 0 ? 2 : 1;
+  const allPicks: any[] = modeData?.picks ?? [];
 
-  // Reset when data changes (new fetch)
-  useEffect(() => {
-    setPage(0);
-    setPage1Picks([]);
-    setExpandedPick(null);
-  }, [data]);
-
-  const currentPagePicks = page === 0 ? page0Picks : page1Picks;
-  const allKnownPicks = [...page0Picks, ...page1Picks];
-
-  const handleNextPage = async () => {
-    if (page === 1) return;
-    if (page1Picks.length === 0 && hasPage1) {
-      setLoadingPage1(true);
-      try {
-        const result = await api.aiPicksMore(mode) as any;
-        setPage1Picks(result.picks ?? []);
-      } catch {}
-      finally { setLoadingPage1(false); }
-    }
-    setPage(1);
+  const categoryCounts: Record<CategoryFilter, number> = {
+    all:       allPicks.length,
+    long_term: allPicks.filter((p: any) => p.category === "long_term").length,
+    bargain:   allPicks.filter((p: any) => p.category === "bargain").length,
+    unknown:   allPicks.filter((p: any) => p.category === "unknown").length,
   };
+
+  const filteredPicks = categoryFilter === "all"
+    ? allPicks
+    : allPicks.filter((p: any) => p.category === categoryFilter);
+
+  useEffect(() => {
+    setExpandedPick(null);
+    setCategoryFilter("all");
+  }, [data]);
 
   const handleRetry = async () => {
     if (retrying) return;
     setRetrying(true);
     try {
-      // Clear any stale empty cache for this mode before re-fetching
-      await api.aiClearMode(mode);
-      const result = await api.aiPicks(mode) as any;
+      await api.aiClearMode("unified");
+      const result = await api.aiPicks("unified") as any;
       if (result?.picks?.length > 0) setOverride(result);
     } catch {}
     finally { setRetrying(false); }
@@ -421,13 +331,12 @@ function PicksPanel({
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 gap-3 flex-wrap">
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`font-semibold text-sm ${accentCls}`}>{label}</span>
-          <span className="text-[10px] text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">{description}</span>
-          {allKnownPicks.length > 0 && !isLoading && (
-            <span className="text-[10px] text-zinc-600">{allKnownPicks.length} picks</span>
+          <span className="font-semibold text-sm text-cyan-400">Pick List</span>
+          <span className="text-[10px] text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">long-term quality</span>
+          {allPicks.length > 0 && !isLoading && (
+            <span className="text-[10px] text-zinc-600">{allPicks.length} picks</span>
           )}
           {modeData?.bias && (
             <span className={`text-xs ${
@@ -436,6 +345,28 @@ function PicksPanel({
             }`}>{modeData.bias}</span>
           )}
         </div>
+
+        {allPicks.length > 0 && !isLoading && (
+          <div className="flex items-center gap-1">
+            {CATEGORY_TABS.map(({ key, label }) => {
+              const count = categoryCounts[key];
+              if (key !== "all" && count === 0) return null;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setCategoryFilter(key)}
+                  className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+                    categoryFilter === key
+                      ? "bg-zinc-700 text-zinc-200"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {label}{key !== "all" && count > 0 ? ` (${count})` : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {isLoading && (
@@ -446,11 +377,7 @@ function PicksPanel({
 
       {modeData && !isLoading && (
         <div className="px-4 py-3 space-y-3">
-          {modeData.market_summary && (
-            <p className="text-xs text-zinc-400 leading-relaxed">{modeData.market_summary}</p>
-          )}
-
-          {page0Picks.length === 0 && (
+          {allPicks.length === 0 && (
             <div className="flex items-center gap-3">
               <p className="text-xs text-zinc-600 italic">Analysis temporarily unavailable.</p>
               <button
@@ -464,10 +391,10 @@ function PicksPanel({
             </div>
           )}
 
-          {currentPagePicks.length > 0 && (
+          {filteredPicks.length > 0 && (
             <div className="space-y-1.5">
-              {currentPagePicks.map((pick: any) => {
-                const key = `${mode}-${pick.ticker}-${pick.rank}`;
+              {filteredPicks.map((pick: any) => {
+                const key = `unified-${pick.ticker}-${pick.rank}`;
                 const isExpanded = expandedPick === key;
                 return (
                   <div key={key} className="rounded-xl border border-zinc-800 overflow-hidden">
@@ -476,10 +403,16 @@ function PicksPanel({
                         <span className="text-xs text-zinc-600 shrink-0">#{pick.rank}</span>
                         <button
                           onClick={() => onTickerSelect(pick.ticker)}
-                          className={`font-bold text-sm shrink-0 ${accentCls} hover:underline`}
+                          className="font-bold text-sm shrink-0 text-cyan-400 hover:underline"
                         >
                           {pick.ticker}
                         </button>
+                        {pick.category === "bargain" && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded border bg-emerald-500/10 border-emerald-600/30 text-emerald-400 shrink-0 hidden sm:inline">Bargain</span>
+                        )}
+                        {pick.category === "unknown" && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded border bg-violet-500/10 border-violet-600/30 text-violet-400 shrink-0 hidden sm:inline">Hidden Gem</span>
+                        )}
                         <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -511,31 +444,8 @@ function PicksPanel({
             </div>
           )}
 
-          {/* Pagination */}
-          {totalPages > 1 && page0Picks.length > 0 && (
-            <div className="flex items-center justify-center gap-3 pt-2 border-t border-zinc-800/60">
-              <button
-                onClick={() => setPage(0)}
-                disabled={page === 0}
-                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-30 px-2 py-1 rounded transition-colors"
-              >
-                <ChevronLeft size={12} /> Prev
-              </button>
-              <span className="text-xs text-zinc-500 tabular-nums">
-                Page {page + 1} / {totalPages}
-              </span>
-              <button
-                onClick={handleNextPage}
-                disabled={page === totalPages - 1 || loadingPage1}
-                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-30 px-2 py-1 rounded transition-colors"
-              >
-                {loadingPage1 ? (
-                  <><RefreshCw size={10} className="animate-spin" /> Loading…</>
-                ) : (
-                  <>Next <ChevronRight size={12} /></>
-                )}
-              </button>
-            </div>
+          {filteredPicks.length === 0 && allPicks.length > 0 && (
+            <p className="text-xs text-zinc-600 italic">No picks in this category yet.</p>
           )}
         </div>
       )}
@@ -547,15 +457,19 @@ function PicksPanel({
 
 function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
   const [fetchKey, setFetchKey] = useState(0);
-  const [tickerInput, setTickerInput] = useState("");
-  const [tickerAnalysis, setTickerAnalysis] = useState<any>(null);
-  const [tickerLoading, setTickerLoading] = useState(false);
-  const [tickerError, setTickerError] = useState<string | null>(null);
-  const [analysisOpen, setAnalysisOpen] = useState(true);
+  const [statusChecked, setStatusChecked] = useState(false);
+  const [picksCached, setPicksCached] = useState(false);
+
+  useEffect(() => {
+    api.aiPicksStatus().then((s: any) => {
+      setPicksCached(!!s.has_picks);
+      setStatusChecked(true);
+    }).catch(() => setStatusChecked(true));
+  }, []);
 
   const { data: allData, loading, error, refetch } = useData(
-    () => api.aiPicksAll() as Promise<any>,
-    [fetchKey],
+    () => picksCached ? api.aiPicksAll() as Promise<any> : Promise.resolve(null),
+    [fetchKey, picksCached],
     { refreshInterval: 0 }
   );
 
@@ -572,25 +486,6 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const handleAnalyzeTicker = async () => {
-    const t = tickerInput.trim().toUpperCase();
-    if (!t) return;
-    setTickerLoading(true);
-    setTickerError(null);
-    setTickerAnalysis(null);
-    try {
-      const result = await api.analyzeTickerAll(t) as any;
-      if (result?.error) throw new Error(result.error);
-      setTickerAnalysis(result);
-      setAnalysisOpen(true);
-      onTickerSelect(t);
-    } catch (e) {
-      setTickerError(e instanceof Error ? e.message : "Analysis failed");
-    } finally {
-      setTickerLoading(false);
-    }
-  };
-
   const handleRefresh = async () => {
     try { await api.aiRefresh(); } catch {}
     setFetchKey((k) => k + 1);
@@ -599,78 +494,6 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
 
   return (
     <div className="space-y-4">
-      {/* Ticker Analyzer */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Search size={14} className="text-zinc-400" />
-          <span className="text-sm font-semibold text-zinc-200">Analyze Any Stock</span>
-        </div>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <input
-              type="text"
-              placeholder="Enter a ticker — get a long-term horizon analysis"
-              value={tickerInput}
-              onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => e.key === "Enter" && handleAnalyzeTicker()}
-              maxLength={10}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors pr-7"
-            />
-            {tickerInput && (
-              <button
-                onClick={() => { setTickerInput(""); setTickerAnalysis(null); setTickerError(null); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
-                tabIndex={-1}
-              >
-                <XCircle size={14} />
-              </button>
-            )}
-          </div>
-          <button
-            onClick={handleAnalyzeTicker}
-            disabled={tickerLoading || !tickerInput.trim()}
-            className="px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors disabled:opacity-40 whitespace-nowrap"
-          >
-            {tickerLoading ? "Analyzing…" : "Analyze"}
-          </button>
-        </div>
-        {tickerError && (
-          <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
-            <AlertTriangle size={11} /> {tickerError}
-          </p>
-        )}
-        {tickerLoading && (
-          <div className="mt-3 space-y-1.5 animate-pulse">
-            <div className="h-3 bg-zinc-800 rounded w-3/4" />
-            <div className="h-3 bg-zinc-800 rounded w-1/2" />
-          </div>
-        )}
-        {tickerAnalysis && !tickerLoading && (
-          <div className="mt-3">
-            <button
-              onClick={() => setAnalysisOpen((o) => !o)}
-              className="w-full flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded-lg border border-zinc-700/50 hover:border-zinc-600 transition-colors mb-2"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-zinc-300">{tickerAnalysis.ticker} — Analysis</span>
-              </div>
-              <span className="text-xs text-zinc-500 flex items-center gap-1">
-                {analysisOpen ? "Collapse" : "Expand"}
-                {analysisOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              </span>
-            </button>
-            {analysisOpen && tickerAnalysis.unified && (
-              <TickerAnalysisCard
-                analysis={tickerAnalysis.unified}
-                onSelect={() => onTickerSelect(tickerAnalysis.unified.ticker)}
-                onSimulate={onSimulate ? () => onSimulate(tickerAnalysis.unified.ticker) : undefined}
-              />
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Header bar */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
@@ -682,14 +505,16 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
           )}
         </div>
         <div className="flex flex-col items-end gap-0.5">
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
-          >
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-            {loading ? `Analyzing… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}` : "Refresh"}
-          </button>
+          {allData && (
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              {loading ? `Analyzing… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}` : "Refresh"}
+            </button>
+          )}
           {loading && loadingSeconds >= 10 && (
             <span className="text-[10px] text-zinc-600 text-right">
               {loadingSeconds < 60 ? "AI warming up — usually 45–120s" : "Almost there…"}
@@ -700,17 +525,36 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
 
       {error && renderError(error)}
 
-      {/* Pick List */}
-      <PicksPanel
-        mode="unified"
-        label="Pick List"
-        description="long-term quality"
-        accentCls="text-cyan-400"
-        data={allData?.unified}
-        loading={loading}
-        onTickerSelect={onTickerSelect}
-        onSimulate={onSimulate}
-      />
+      {/* Status checking skeleton */}
+      {!statusChecked && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 space-y-2 animate-pulse">
+          {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+        </div>
+      )}
+
+      {/* No cached picks — show generate button */}
+      {statusChecked && !picksCached && !loading && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col items-center gap-3">
+          <p className="text-sm text-zinc-400">No picks generated yet.</p>
+          <button
+            onClick={() => setPicksCached(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors"
+          >
+            <Sparkles size={14} />
+            Generate Picks
+          </button>
+        </div>
+      )}
+
+      {/* Pick list */}
+      {(picksCached || allData) && (
+        <PicksPanel
+          data={allData?.unified}
+          loading={loading}
+          onTickerSelect={onTickerSelect}
+          onSimulate={onSimulate}
+        />
+      )}
 
       <p className="text-[10px] text-zinc-700 italic px-1">
         AI-generated for simulation purposes only. Not financial advice. Always verify independently.

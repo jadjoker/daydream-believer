@@ -12,6 +12,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 _longterm_cache: Dict = {"ts": 0.0, "data": []}
 _discovery_cache: Dict = {"ts": 0.0, "data": []}
 _bargain_cache: Dict = {"ts": 0.0, "data": []}
+_unknowns_cache: Dict = {"ts": 0.0, "data": []}
 _FUND_CACHE_TTL = 7200  # 2 hours — fundamentals don't change hourly
 
 
@@ -646,9 +647,10 @@ def _validate_picks(picks_raw: List[Dict], candidates: List[Dict]) -> List[Dict]
             "catalyst": p.get("catalyst", ""),
             "key_risk": p.get("key_risk", ""),
         }
-        # Preserve hold_horizon for unified mode picks
         if p.get("hold_horizon"):
             pick["hold_horizon"] = p["hold_horizon"]
+        if p.get("category"):
+            pick["category"] = p["category"]
         cleaned.append(pick)
     return cleaned
 
@@ -705,12 +707,26 @@ async def generate_market_picks(
 
     if mode == "unified":
         try:
-            candidates = await screen_longterm_candidates(top_n=5, earnings_lookup=earnings_lookup)
+            lt_cands, bg_cands, un_cands = await asyncio.gather(
+                screen_longterm_candidates(top_n=5,  earnings_lookup=earnings_lookup),
+                screen_bargain_candidates(top_n=4,   earnings_lookup=earnings_lookup),
+                screen_unknowns_candidates(top_n=4,  earnings_lookup=earnings_lookup),
+                return_exceptions=True,
+            )
         except Exception:
-            candidates = []
+            lt_cands, bg_cands, un_cands = [], [], []
+
+        lt = lt_cands if isinstance(lt_cands, list) else []
+        bg = bg_cands if isinstance(bg_cands, list) else []
+        un = un_cands if isinstance(un_cands, list) else []
+
+        for c in lt: c["hint_category"] = "long_term"
+        for c in bg: c["hint_category"] = "bargain"
+        for c in un: c["hint_category"] = "unknown"
+
+        candidates = lt + bg + un
         if not candidates:
-            return {"error": "No candidates", "picks": [], "market_summary": "Insufficient data.",
-                    "bias": "neutral", "generated_at": date_str}
+            return {"error": "No candidates", "picks": [], "bias": "neutral", "generated_at": date_str}
         prompt = _build_unified_prompt(candidates, market_overview, date_str)
     elif mode == "long":
         try:
@@ -738,7 +754,7 @@ async def generate_market_picks(
         prompt = _build_prompt(candidates, regime, market_overview, date_str, next_trading_day_label)
 
     loop = asyncio.get_running_loop()
-    tokens = 2500 if mode == "unified" else (3200 if mode in ("long", "discovery") else 1800)
+    tokens = 3000 if mode == "unified" else (3200 if mode in ("long", "discovery") else 1800)
 
     for attempt in range(2):
         raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=tokens))
@@ -1824,6 +1840,93 @@ BARGAIN_UNIVERSE: List[tuple] = [
 BARGAIN_MODEL: Dict[str, str] = {t: m for t, m in BARGAIN_UNIVERSE}
 
 
+# ─── Unknowns universe ───────────────────────────────────────────────────────
+#
+# Less-followed small/mid-cap businesses with genuine investment merit.
+# Low analyst coverage (< 8 ratings typical) makes these "unknowns" to
+# most retail investors while still having real fundamentals to evaluate.
+
+UNKNOWNS_UNIVERSE: List[tuple] = [
+    ("FROG",  "saas"),        # JFrog — DevOps artifact management
+    ("CFLT",  "saas"),        # Confluent — enterprise data streaming
+    ("FLYW",  "fintech"),     # Flywire — vertical payment software
+    ("WK",    "saas"),        # Workiva — financial reporting SaaS
+    ("TASK",  "platform"),    # TaskUs — digital business services
+    ("PAYO",  "fintech"),     # Payoneer — cross-border B2B payments
+    ("ACMR",  "deeptech"),    # ACM Research — semiconductor equipment
+    ("SMTC",  "deeptech"),    # Semtech — IoT connectivity chips
+    ("AMBA",  "deeptech"),    # Ambarella — edge AI chips
+    ("PRCT",  "healthcare"),  # Procept BioRobotics — surgical robotics
+    ("AAON",  "industrial"),  # AAON Inc — HVAC systems, profitable
+    ("CRVL",  "financial"),   # CorVel Corp — risk management services
+]
+
+UNKNOWNS_MODEL: Dict[str, str] = {t: m for t, m in UNKNOWNS_UNIVERSE}
+
+
+async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = None) -> List[Dict]:
+    now = time.time()
+    if _unknowns_cache["ts"] and (now - _unknowns_cache["ts"]) < _FUND_CACHE_TTL and _unknowns_cache["data"]:
+        return _unknowns_cache["data"][:top_n]
+
+    from services import yahoo_finance as yf_svc
+    from services import finnhub_service
+
+    tickers = [t for t, _ in UNKNOWNS_UNIVERSE]
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=1.2)
+
+    candidates = []
+    for ticker, quote, fund in zip(tickers, quote_results, fund_results):
+        q = quote if isinstance(quote, dict) else {}
+        f = fund  if isinstance(fund,  dict) else {}
+        price = q.get("price") or 0
+        if not price:
+            continue
+
+        model = UNKNOWNS_MODEL.get(ticker, "")
+        score = _score_longterm(f, price, model)
+
+        entry_low  = round(price * 0.97, 2)
+        entry_high = round(price * 1.03, 2)
+        stop_loss  = round(price * 0.85, 2)
+        target     = round(price * 1.30, 2)
+        rr = round((target - price) / max(price - stop_loss, 0.01), 1)
+
+        parts = []
+        if f.get("pe_ratio"):                     parts.append(f"P/E {f['pe_ratio']:.1f}")
+        if f.get("forward_pe"):                   parts.append(f"FwdP/E {f['forward_pe']:.1f}")
+        if f.get("revenue_growth") is not None:   parts.append(f"RevGrowth {f['revenue_growth']*100:.1f}%")
+        if f.get("gross_margins") is not None:    parts.append(f"GrossMargin {f['gross_margins']*100:.1f}%")
+        if f.get("profit_margin") is not None:    parts.append(f"NetMargin {f['profit_margin']*100:.1f}%")
+        if f.get("roe") is not None:              parts.append(f"ROE {f['roe']*100:.1f}%")
+        if f.get("debt_to_equity") is not None:   parts.append(f"D/E {f['debt_to_equity']:.0f}")
+
+        candidates.append({
+            "ticker": ticker,
+            "name": q.get("name", ticker),
+            "price": price,
+            "sector": q.get("sector", ""),
+            "industry": q.get("industry", ""),
+            "business_model": model,
+            "week_52_high": q.get("week_52_high"),
+            "week_52_low":  q.get("week_52_low"),
+            "fund_summary": " | ".join(parts) if parts else "Limited data",
+            "entry_low": entry_low, "entry_high": entry_high,
+            "stop_loss": stop_loss, "target": target, "rr": rr,
+            "score": score,
+        })
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    top = candidates[:max(top_n + 2, 7)]
+    top = await _enrich_candidates(top, earnings_lookup)
+    top.sort(key=lambda x: x["score"], reverse=True)
+
+    _unknowns_cache["ts"] = time.time()
+    _unknowns_cache["data"] = top + candidates[len(top):]
+    return top[:top_n]
+
+
 # ─── Bargain scoring ─────────────────────────────────────────────────────────
 
 def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
@@ -2100,106 +2203,75 @@ def _build_unified_prompt(
     market_overview: Dict,
     date_str: str,
 ) -> str:
+    cat_label_map = {"long_term": "LONG-TERM", "bargain": "BARGAIN", "unknown": "UNKNOWN"}
     rows = []
     for i, c in enumerate(candidates, 1):
         model_label = c.get("business_model", "")
-        entry_basis = c.get("entry_method", "technical level")
         entry_str = (
-            f"${c['entry_low']:.2f}–${c['entry_high']:.2f} ({entry_basis})"
-            if c.get("entry_low") else "at/near current price"
+            f"${c['entry_low']:.2f}–${c['entry_high']:.2f}"
+            if c.get("entry_low") else "near current price"
         )
         atr = c.get("atr_14")
         atr_str = f" | ATR ${atr:.2f}" if atr else ""
-        ta_str = c.get("ta_summary", "")
+        ta_str  = c.get("ta_summary", "")
         range_str = c.get("range_str", "")
+        cat = cat_label_map.get(c.get("hint_category", "long_term"), "LONG-TERM")
         row = (
-            f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}{atr_str}\n"
-            f"   Fundamentals: {c['fund_summary']}\n"
-            f"   Entry: {entry_str} | Stop ${c['stop_loss']:.2f} | Target ${c.get('target', 0):.2f} | R/R 1:{c['rr']}"
+            f"#{i} [{cat}] {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | {c.get('sector','')}{atr_str}\n"
+            f"   Fund: {c['fund_summary']}\n"
+            f"   Entry: {entry_str} | Stop ${c['stop_loss']:.2f} | Target ${c.get('target',0):.2f} | R/R 1:{c['rr']}"
         )
-        if ta_str:
-            row += f"\n   TA: {ta_str}"
-        if range_str:
-            row += f"\n   {range_str}"
+        if ta_str:   row += f"\n   TA: {ta_str}"
+        if range_str: row += f"\n   {range_str}"
         rows.append(row)
+
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
-    vix = market_overview.get("vix") or 20
+    vix   = market_overview.get("vix") or 20
     ticker_map = " | ".join(f"{c['ticker']}={c['name']}" for c in candidates)
-    time_note = _market_time_context(market_overview, "the next session")
-    regime = assess_market_regime(market_overview)
-    macro_lines = [f"SPY: {spy_c:+.1f}% | VIX: {vix:.1f}"]
-    if regime.get("sector_rotation"):
-        macro_lines.append(f"Sector rotation: {regime['sector_rotation']}")
-    if regime.get("yield_context"):
-        macro_lines.append(regime["yield_context"])
-    if regime.get("macro_stats"):
-        macro_lines.append(regime["macro_stats"])
-    if regime.get("policy_stance"):
-        macro_lines.append(f"Policy stance: {regime['policy_stance']}")
-    if regime.get("upcoming_events"):
-        macro_lines.append(f"Upcoming risk events: {regime['upcoming_events']}")
-    macro_block = "\n".join(macro_lines)
+    time_note  = _market_time_context(market_overview, "the next session")
+    regime     = assess_market_regime(market_overview)
+    macro_lines = [f"SPY {spy_c:+.1f}% | VIX {vix:.1f}"]
+    if regime.get("sector_rotation"):   macro_lines.append(regime["sector_rotation"])
+    if regime.get("yield_context"):     macro_lines.append(regime["yield_context"])
+    if regime.get("macro_stats"):       macro_lines.append(regime["macro_stats"])
+    if regime.get("upcoming_events"):   macro_lines.append(f"Risk events: {regime['upcoming_events']}")
+    macro_block = " | ".join(macro_lines)
 
     return f"""You are an expert long-term investor. Today is {date_str}.{time_note}
 
-Your goal: identify the best stocks to hold long-term and assign each an appropriate hold horizon based on business quality, growth stage, compounding potential, and what analysts and insiders are signaling.
-
-HOLD HORIZONS — assign the most appropriate one per pick:
-- "1-3yr": near-term catalysts, valuation gap closing, current business momentum. Entry: use suggested technical level, Stop 10-15% below entry, Target 20-50% upside
-- "3-5yr": proven compounders with durable growth and expanding moat. Entry: use suggested technical level, Stop 15-25% below entry, Target 50-120% upside
-- "5-10yr": decade-long compounders or disruptors with wide moats and massive TAM. Entry: use suggested technical level or widen slightly, Stop 30-40% below entry, Target 150-400% upside
-
-BUSINESS MODEL LENSES (calibrate your thesis accordingly):
-- mega: reasonable valuation + market dominance; usually "1-3yr" or "3-5yr"
-- saas: ARR growth, net revenue retention, gross margin expansion → "3-5yr" or "5-10yr"
-- platform: network effect durability, user growth trajectory → often "5-10yr" if moat is wide
-- fintech: payment volume growth, margin expansion → "3-5yr" or "5-10yr"
-- deeptech: R&D differentiation, path to dominance → usually "5-10yr"
-- healthcare: pipeline, patent runway, pricing power → "3-5yr" or "5-10yr"
-- consumer: brand durability, unit economics, pricing power → typically "3-5yr"
-- financial: ROE consistency, dividend growth → "1-3yr" or "3-5yr"
-- industrial/energy: cycle positioning, capital return → "1-3yr" or "3-5yr"
-
-HOW TO USE ANALYST & INSIDER DATA (shown in fund_summary):
-- "Analysts: 20B/5H/1S | Target $520 (+18%)" → overwhelming buy consensus + upside to target → lift confidence
-- "Analysts: 6B/12H/8S | Target $140 (+2%)" → mixed/negative — only include if fundamentals justify contrarian call
-- "Insiders: buying ▲" → management conviction at current levels → strong confirming signal, increase confidence
-- "Insiders: selling ▼" → worth flagging in key_risk even if fundamentals look good
-- "Earnings: 2025-05-30" → use as specific catalyst in your catalyst field
-- "Short 18%" → heavily shorted — either value trap risk OR short squeeze potential; evaluate with fundamentals
-
-TICKER IDENTITY — memorize before writing any thesis:
+TICKER IDENTITY — verify before writing any thesis:
 {ticker_map}
-Every pick's thesis must reference ONLY the company matched to that ticker above.
 
-=== MACRO CONTEXT ===
-{macro_block}
+CATEGORIES in this candidate pool:
+- LONG-TERM: quality compounders, strong fundamentals, established businesses
+- BARGAIN: undervalued stocks — good business at cheap price or valuation
+- UNKNOWN: less-followed small/mid-cap with investment merit; few analyst ratings
 
-=== CANDIDATES (ranked by fundamental score) ===
+MACRO: {macro_block}
+
+=== CANDIDATES ===
 {candidates_block}
 
 === YOUR JOB ===
-1. Select all 5 candidates — spread across at least 2 different hold_horizon values
-2. Assign hold_horizon per pick: "1-3yr", "3-5yr", or "5-10yr"
-3. Set price levels: use the suggested technical entry zone shown above; adjust stop and target to match the horizon ranges. Stop must be BELOW entry.
-4. trade_type must be one of: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
-5. Write a 2-sentence thesis. EACH sentence must cite a specific numeric value (revenue growth %, margins, ratios, analyst consensus %, insider activity).
-6. Confidence ≥ 8: strong fundamentals + clear compounding path + analyst/insider confirmation. Do not include picks with confidence < 6.
+1. Select best picks: 2–3 LONG-TERM, 2–3 BARGAIN, 1–2 UNKNOWN (total 5–8)
+2. Assign matching category to each pick
+3. Use suggested entry zone; calibrate stop/target to conviction level
+4. trade_type: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
+5. Write a 3-sentence thesis citing SPECIFIC numeric data (revenue %, P/E, margins, analyst upside, insider activity)
+6. Confidence ≥ 7 requires strong thesis + multiple confirming signals. Omit picks below 6.
+7. Stop must be BELOW entry for every pick.
 
-RULES:
-- market_summary must reference VIX {vix:.1f} and macro conditions for long-term position building
-- CRITICAL: thesis for ticker X must ONLY describe the company named for X in TICKER IDENTITY above
+CRITICAL: thesis for ticker X must ONLY describe the company shown for X in TICKER IDENTITY above.
 
 Respond ONLY with valid JSON, no markdown:
 {{
-  "market_summary": "2 sentences on macro backdrop and whether conditions favor accumulating long-term positions",
   "bias": "bullish",
   "picks": [
     {{
       "rank": 1,
       "ticker": "MSFT",
-      "hold_horizon": "3-5yr",
+      "category": "long_term",
       "trade_type": "compounder",
       "entry_low": 420.00,
       "entry_high": 432.00,
@@ -2207,13 +2279,13 @@ Respond ONLY with valid JSON, no markdown:
       "target": 680.00,
       "risk_reward": "1:2.8",
       "confidence": 8,
-      "thesis": "Azure cloud revenue grew 31% YoY, accelerating for the third consecutive quarter on AI workload adoption. Forward P/E of 34x sits below the 3-year average of 38x despite a structurally higher earnings trajectory from Copilot monetization.",
-      "catalyst": "Copilot enterprise seat expansion or Azure market share gains announced at next earnings",
-      "key_risk": "Margin compression if AI infrastructure capex outpaces Azure revenue growth in next 2–3 years"
+      "thesis": "3 sentences with specific numeric data.",
+      "catalyst": "Specific near-term catalyst",
+      "key_risk": "Main risk to the thesis"
     }}
   ],
   "generated_at": "{date_str}"
-}}"""
+}}
 
 
 # ─── Combined all-modes single-ticker analysis ───────────────────────────────

@@ -16,19 +16,6 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-function getPasscode(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("picks_passcode") ?? "";
-}
-
-function apiPicksFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const existing = (options?.headers ?? {}) as Record<string, string>;
-  return apiFetch<T>(path, {
-    ...options,
-    headers: { ...existing, "x-picks-passcode": getPasscode() },
-  });
-}
-
 export const api = {
   // Market overview
   marketOverview: () => apiFetch("/market/overview"),
@@ -78,16 +65,14 @@ export const api = {
   earningsCalendar: (weeks = 2) => apiFetch(`/earnings/calendar?weeks_ahead=${weeks}`),
   tickerEarnings: (ticker: string) => apiFetch(`/earnings/ticker/${ticker}`),
 
-  // AI — all methods send the stored passcode header automatically
-  verifyPasscode: (code: string) =>
-    apiFetch("/ai/verify-passcode", { method: "POST", headers: { "x-picks-passcode": code } }),
-  aiPicks: (mode: "unified" | "bargain" | "long" | "discovery" = "unified") =>
-    apiPicksFetch(`/ai/picks?mode=${mode}`),
-  aiPicksAll: () => apiPicksFetch("/ai/picks-all"),
-  aiPicksMore: (mode: string) => apiPicksFetch(`/ai/picks-more/${mode}`),
-  aiPicksStatus: () => apiPicksFetch("/ai/picks-status"),
-  aiRefresh: () => apiPicksFetch("/ai/refresh", { method: "POST" }),
-  aiClearMode: (mode: string) => apiPicksFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
+  // AI picks
+  aiPicks: (mode: "unified" | "long" | "discovery" = "unified") =>
+    apiFetch(`/ai/picks?mode=${mode}`),
+  aiPicksAll: () => apiFetch("/ai/picks-all"),
+  aiPicksMore: (mode: string) => apiFetch(`/ai/picks-more/${mode}`),
+  aiPicksStatus: () => apiFetch("/ai/picks-status"),
+  aiRefresh: () => apiFetch("/ai/refresh", { method: "POST" }),
+  aiClearMode: (mode: string) => apiFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
   analyzeTicker: (ticker: string, mode: "unified" | "long" | "discovery" = "unified") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string, refresh = false) =>

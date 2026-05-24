@@ -1,7 +1,6 @@
 import asyncio
-import os
 import time
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from services import ai_service
 from services.screener_service import run_screener
@@ -22,14 +21,6 @@ _PICKS_TTL    = None  # picks never expire — manual refresh only
 # Prevent duplicate concurrent generation
 _picks_lock = asyncio.Lock()
 _is_generating: bool = False
-
-
-def _require_passcode(x_picks_passcode: str = Header(None)):
-    """FastAPI dependency: validates X-Picks-Passcode header against PICKS_PASSCODE env var.
-    If PICKS_PASSCODE is not set, all requests are allowed (dev/local mode)."""
-    passcode = os.getenv("PICKS_PASSCODE", "")
-    if passcode and x_picks_passcode != passcode:
-        raise HTTPException(status_code=401, detail="Invalid passcode")
 
 
 def _next_trading_day(now: datetime) -> tuple[str, str]:
@@ -186,22 +177,8 @@ async def _inner_generate_all_picks() -> dict:
     any_empty = len(unified_result.get("picks", [])) == 0
     effective_ttl = 300 if any_empty else _PICKS_TTL  # None = never expires
 
-    # Cache full pick sets for /picks-more/{mode}
-    set_cached("ai_picks_all_full", full, ttl=effective_ttl)
-
-    # Return first 10 picks per section in initial response
-    trimmed = {}
-    for mode_key, mode_result in full.items():
-        all_picks = mode_result.get("picks", [])
-        trimmed[mode_key] = {
-            **mode_result,
-            "picks": all_picks[:5],
-            "has_more": len(all_picks) > 5,
-            "total_picks": len(all_picks),
-        }
-
-    set_cached("ai_picks_all", trimmed, ttl=effective_ttl)
-    return trimmed
+    set_cached("ai_picks_all", full, ttl=effective_ttl)
+    return full
 
 
 async def background_refresh_picks():
@@ -226,16 +203,9 @@ async def background_refresh_picks():
         _is_generating = False
 
 
-@router.post("/verify-passcode")
-async def verify_passcode(_: None = Depends(_require_passcode)):
-    """Validates the X-Picks-Passcode header. Returns 200 if correct, 401 if not."""
-    return {"ok": True}
-
-
 @router.get("/picks")
 async def get_ai_picks(
     mode: str = Query("unified", pattern="^(unified|long|discovery)$"),
-    _: None = Depends(_require_passcode),
 ):
     cache_key = f"ai_picks_{mode}"
     cached = get_cached(cache_key)
@@ -271,7 +241,7 @@ async def get_ai_picks(
 
 
 @router.get("/picks-all")
-async def get_ai_picks_all(_: None = Depends(_require_passcode)):
+async def get_ai_picks_all():
     """Fetch unified picks (5 picks). Full set cached for /picks-more/unified."""
     cached = get_cached("ai_picks_all")
     if cached is not None:
@@ -295,7 +265,7 @@ async def get_ai_picks_all(_: None = Depends(_require_passcode)):
 
 
 @router.get("/picks-more/{mode}")
-async def get_ai_picks_more(mode: str, _: None = Depends(_require_passcode)):
+async def get_ai_picks_more(mode: str):
     if mode not in ("unified", "long", "discovery"):
         raise HTTPException(400, "mode must be unified, bargain, long, or discovery")
     full = get_cached("ai_picks_all_full")
@@ -310,7 +280,7 @@ async def get_ai_picks_more(mode: str, _: None = Depends(_require_passcode)):
 
 
 @router.get("/picks-status")
-async def get_ai_picks_status(_: None = Depends(_require_passcode)):
+async def get_ai_picks_status():
     cached = get_cached("ai_picks_all")
     has_picks = cached is not None
     generated_at = None
@@ -328,7 +298,7 @@ async def get_ai_picks_status(_: None = Depends(_require_passcode)):
 
 
 @router.post("/refresh")
-async def refresh_ai_picks(_: None = Depends(_require_passcode)):
+async def refresh_ai_picks():
     """
     Clear the picks cache and fire a background regeneration.
     Returns immediately — frontend can poll /ai/picks-status or just call /ai/picks-all
@@ -343,7 +313,7 @@ async def refresh_ai_picks(_: None = Depends(_require_passcode)):
 
 
 @router.post("/clear-mode/{mode}")
-async def clear_mode_cache(mode: str, _: None = Depends(_require_passcode)):
+async def clear_mode_cache(mode: str):
     """Delete cached picks for a single mode so the next /picks?mode= call regenerates."""
     if mode not in ("unified", "long", "discovery"):
         raise HTTPException(400, "Invalid mode")
