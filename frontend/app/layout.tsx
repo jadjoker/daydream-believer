@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Daydream Believer — Day Trader Assistant",
+  title: "Daydream — Day Trader Assistant",
   description: "Real-time market data, technicals, sentiment, options flow, news, and insider activity",
 };
 
