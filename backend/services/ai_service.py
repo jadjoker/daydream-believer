@@ -2119,13 +2119,14 @@ async def analyze_ticker_all_modes(
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    quote_yf, ta, fund, quote_fh, analyst, insider = await asyncio.gather(
+    quote_yf, ta, fund, quote_fh, analyst, insider, earnings = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1d"),
         finnhub_service.get_fundamentals_mapped(ticker),
         finnhub_service.get_quote(ticker),
         finnhub_service.get_analyst_summary(ticker),
         finnhub_service.get_insider_summary(ticker),
+        finnhub_service.get_ticker_earnings_data(ticker),
         return_exceptions=True,
     )
 
@@ -2135,12 +2136,13 @@ async def analyze_ticker_all_modes(
     fh_data = quote_fh if isinstance(quote_fh, dict) else {}
     analyst_data = analyst if isinstance(analyst, dict) else {}
     insider_signal = insider if isinstance(insider, str) else ""
+    earnings_data = earnings if isinstance(earnings, dict) else {}
 
     price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
     name = quote_data.get("name") or fh_data.get("name") or ticker
     change_pct_atm = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
     sector = quote_data.get("sector") or fh_data.get("sector") or ""
-    model = EQUITY_MODEL.get(ticker.upper(), "")
+    industry = quote_data.get("industry") or ""
 
     if not price:
         err = {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
@@ -2148,67 +2150,164 @@ async def analyze_ticker_all_modes(
 
     regime = assess_market_regime(market_overview)
 
-    # Default levels for each horizon (Claude will refine these)
+    # ── ATR-based stop distances (replaces fixed-% math) ─────────────────────
+    atr_14 = ta_data.get("atr_14") or (price * 0.02)
     ema50 = ta_data.get("ema_50")
-    h1_stop = round(ema50 * 0.97, 2) if ema50 and ema50 < price * 0.90 else round(price * 0.87, 2)
-    h1_levels = {  # 1-3yr
-        "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.03, 2),
+    sma200 = ta_data.get("sma_200")
+
+    # Floors prevent stops from being unrealistically tight or blown out
+    h1_stop = round(max(price - 2.0 * atr_14, price * 0.82), 2)
+    h2_stop = round(max(price - 3.5 * atr_14, price * 0.70), 2)
+    h3_stop = round(max(price - 5.0 * atr_14, price * 0.55), 2)
+
+    h1_levels = {
+        "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.02, 2),
         "stop_loss": h1_stop, "target": round(price * 1.30, 2),
     }
-    h2_levels = {  # 3-5yr
-        "entry_low": round(price * 0.97, 2), "entry_high": round(price * 1.03, 2),
-        "stop_loss": round(price * 0.80, 2), "target": round(price * 1.75, 2),
+    h2_levels = {
+        "entry_low": round(price * 0.96, 2), "entry_high": round(price * 1.03, 2),
+        "stop_loss": h2_stop, "target": round(price * 1.75, 2),
     }
-    h3_levels = {  # 5-10yr
-        "entry_low": round(price * 0.95, 2), "entry_high": round(price * 1.05, 2),
-        "stop_loss": round(price * 0.65, 2), "target": round(price * 3.00, 2),
+    h3_levels = {
+        "entry_low": round(price * 0.94, 2), "entry_high": round(price * 1.05, 2),
+        "stop_loss": h3_stop, "target": round(price * 3.00, 2),
     }
 
-    signals = []
+    # ── Technical analysis (full signal set) ─────────────────────────────────
+    ta_lines = []
     if ta_data:
-        rsi = ta_data.get("rsi_14")
-        macd_hist = ta_data.get("macd_hist")
-        ema9 = ta_data.get("ema_9"); ema21 = ta_data.get("ema_21")
-        adx = ta_data.get("adx"); stoch_k = ta_data.get("stoch_k")
-        if rsi: signals.append(f"RSI {rsi:.0f}{'(oversold)' if rsi < 30 else '(overbought)' if rsi > 70 else ''}")
-        if macd_hist is not None: signals.append(f"MACD {'▲' if macd_hist > 0 else '▼'}{abs(macd_hist):.3f}")
-        if ema9 and ema21: signals.append(f"EMA9{'>' if ema9 > ema21 else '<'}EMA21")
-        if adx: signals.append(f"ADX {adx:.0f}")
-        if stoch_k: signals.append(f"Stoch {stoch_k:.0f}")
-    else:
-        signals.append(f"Day change: {change_pct_atm:+.1f}%")
-        if change_pct_atm > 3: signals.append("Strong bullish momentum")
-        elif change_pct_atm > 1: signals.append("Mild bullish")
-        elif change_pct_atm < -3: signals.append("Strong selling pressure")
-        elif change_pct_atm < -1: signals.append("Mild bearish")
+        sig_summary = ta_data.get("signal_summary", "")
+        bull_sigs = ta_data.get("bull_signals", [])
+        bear_sigs = ta_data.get("bear_signals", [])
+        if sig_summary:
+            ta_lines.append("Trend: " + sig_summary)
+        if bull_sigs:
+            ta_lines.append("Bull: " + "; ".join(bull_sigs[:5]))
+        if bear_sigs:
+            ta_lines.append("Bear: " + "; ".join(bear_sigs[:5]))
 
-    def _pct(v, label): return f"{label}: {v*100:.1f}%" if v is not None else None
+        rsi = ta_data.get("rsi_14")
+        adx = ta_data.get("adx")
+        bb_pct = ta_data.get("bb_pct")
+        rel_vol = ta_data.get("rel_volume")
+        key_vals = []
+        if rsi is not None: key_vals.append(f"RSI {rsi:.0f}")
+        if adx is not None: key_vals.append(f"ADX {adx:.0f}")
+        if atr_14: key_vals.append(f"ATR ${atr_14:.2f}")
+        if rel_vol is not None: key_vals.append(f"RelVol {rel_vol:.1f}x")
+        if bb_pct is not None: key_vals.append(f"BB%B {bb_pct:.2f}")
+        if key_vals:
+            ta_lines.append("Metrics: " + " | ".join(key_vals))
+
+        if ema50 and sma200:
+            cross = "Golden Cross" if ema50 > sma200 else "Death Cross"
+            pct_vs_200 = (price - sma200) / sma200 * 100
+            ta_lines.append(
+                cross + " (EMA50 vs SMA200) | Price "
+                + f"{pct_vs_200:+.1f}%" + " vs SMA200 ($" + f"{sma200:.2f})"
+            )
+    else:
+        ta_lines.append(f"Day change: {change_pct_atm:+.1f}%")
+
+    ta_block = "\n".join(ta_lines)
+
+    # ── 52-week range context ─────────────────────────────────────────────────
+    w52h = quote_data.get("week_52_high")
+    w52l = quote_data.get("week_52_low")
+    range_str = ""
+    if w52h and w52l and w52h > w52l:
+        pct_from_high = (w52h - price) / w52h * 100
+        range_pct = (price - w52l) / (w52h - w52l) * 100
+        range_str = (
+            "52W Range: $" + f"{w52l:.2f}" + "–$" + f"{w52h:.2f}"
+            + " | Price at " + f"{range_pct:.0f}%" + " of range ("
+            + f"{pct_from_high:.1f}%" + " off 52W high)"
+        )
+
+    # ── Fundamentals (complete set) ───────────────────────────────────────────
+    def _pct(v, label):
+        return (label + ": " + f"{v*100:.1f}%") if v is not None else None
+
     fund_lines = [x for x in [
-        f"P/E: {fund_data['pe_ratio']:.1f}" if fund_data.get("pe_ratio") else None,
+        ("P/E: " + f"{fund_data['pe_ratio']:.1f}") if fund_data.get("pe_ratio") else None,
+        ("FwdP/E: " + f"{fund_data['forward_pe']:.1f}") if fund_data.get("forward_pe") else None,
+        ("P/S: " + f"{fund_data['ps_ratio']:.1f}") if fund_data.get("ps_ratio") else None,
+        ("P/B: " + f"{fund_data['pb_ratio']:.1f}") if fund_data.get("pb_ratio") else None,
         _pct(fund_data.get("revenue_growth"), "RevGrowth"),
+        _pct(fund_data.get("earnings_growth"), "EPSGrowth"),
         _pct(fund_data.get("gross_margins"), "GrossMargin"),
+        _pct(fund_data.get("operating_margin"), "OpMargin"),
         _pct(fund_data.get("profit_margin"), "NetMargin"),
         _pct(fund_data.get("roe"), "ROE"),
-        f"D/E: {fund_data['debt_to_equity']:.0f}" if fund_data.get("debt_to_equity") is not None else None,
-        f"FCF: ${fund_data['free_cashflow']/1e9:.1f}B" if fund_data.get("free_cashflow") else None,
-        f"Div: {fund_data['dividend_yield']*100:.1f}%" if fund_data.get("dividend_yield") else None,
+        ("D/E: " + f"{fund_data['debt_to_equity']:.0f}") if fund_data.get("debt_to_equity") is not None else None,
+        ("FCF: $" + f"{fund_data['free_cashflow']/1e9:.1f}B") if fund_data.get("free_cashflow") else None,
+        ("Div: " + f"{fund_data['dividend_yield']*100:.1f}%") if fund_data.get("dividend_yield") else None,
+        ("ShortRatio: " + f"{fund_data['short_ratio']:.1f}d") if fund_data.get("short_ratio") else None,
     ] if x]
     fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data limited"
 
-    # Analyst consensus line
+    # ── Analyst consensus ─────────────────────────────────────────────────────
     analyst_str = ""
     a_buy = analyst_data.get("analyst_buy", 0) or 0
     a_hold = analyst_data.get("analyst_hold", 0) or 0
     a_sell = analyst_data.get("analyst_sell", 0) or 0
     a_target = analyst_data.get("target_price")
+    a_target_low = analyst_data.get("target_low")
+    a_target_high = analyst_data.get("target_high")
+    a_count = analyst_data.get("analyst_count", 0) or 0
     if (a_buy + a_hold + a_sell) > 0:
-        analyst_str = f"Analysts: {a_buy}B/{a_hold}H/{a_sell}S"
+        analyst_str = f"Analysts ({a_count}): {a_buy}B/{a_hold}H/{a_sell}S"
         if a_target and price:
             upside = (a_target - price) / price * 100
             analyst_str += f" | Target ${a_target:.0f} ({upside:+.0f}%)"
-    insider_str = f"Insiders: {insider_signal} {'▲' if insider_signal == 'buying' else '▼' if insider_signal == 'selling' else ''}" if insider_signal else ""
+            if a_target_low and a_target_high:
+                analyst_str += f" range ${a_target_low:.0f}–${a_target_high:.0f}"
 
-    model_lens = {
+    insider_str = ""
+    if insider_signal:
+        arrow = "▲" if insider_signal == "buying" else ("▼" if insider_signal == "selling" else "")
+        insider_str = ("Insiders: " + insider_signal + (" " + arrow if arrow else "")).strip()
+
+    # ── Earnings context ──────────────────────────────────────────────────────
+    earnings_str = ""
+    if earnings_data:
+        next_date = earnings_data.get("next_date")
+        last_surprise = earnings_data.get("last_surprise_pct")
+        if next_date:
+            from datetime import date as _date
+            try:
+                nd = _date.fromisoformat(next_date)
+                days_out = (nd - _date.today()).days
+                if days_out >= 0:
+                    earnings_str = f"Next earnings: {next_date} ({days_out}d out)"
+                    if last_surprise is not None:
+                        earnings_str += f" | Last EPS surprise: {last_surprise:+.1f}%"
+            except Exception:
+                pass
+
+    # ── Auto-detect business model from sector/industry ───────────────────────
+    manual_model = EQUITY_MODEL.get(ticker.upper(), "")
+    if manual_model:
+        model = manual_model
+    else:
+        sl = sector.lower()
+        il = industry.lower()
+        if any(k in sl for k in ["technology", "information technology"]):
+            model = "saas" if any(k in il for k in ["software", "internet", "cloud"]) else "deeptech"
+        elif "financial" in sl or "bank" in sl:
+            model = "fintech" if any(k in il for k in ["payment", "processing", "fintech"]) else "financial"
+        elif any(k in sl for k in ["health", "pharma", "biotech"]):
+            model = "healthcare"
+        elif any(k in sl for k in ["consumer", "retail"]):
+            model = "consumer"
+        elif any(k in sl for k in ["energy", "oil", "gas"]):
+            model = "energy"
+        elif any(k in sl for k in ["industrial", "manufactur"]):
+            model = "industrial"
+        else:
+            model = ""
+
+    model_lens_map = {
         "mega":       "dominant incumbent — value vs moat sustainability; usually 1-3yr or 3-5yr",
         "saas":       "recurring revenue flywheel — ARR growth, NRR >120%, gross margin expansion; often 3-5yr or 5-10yr",
         "platform":   "network-effect compounder — user growth, take-rate expansion; often 5-10yr",
@@ -2219,58 +2318,66 @@ async def analyze_ticker_all_modes(
         "financial":  "capital allocator — ROE consistency, dividend growth; 1-3yr or 3-5yr",
         "industrial": "durable cash flow — cycle positioning, capital discipline; 1-3yr or 3-5yr",
         "energy":     "commodity + capital return — reserve life, dividend sustainability; 1-3yr or 3-5yr",
-    }.get(model, "evaluate long-term compounding potential")
-    model_context = f"\nBUSINESS MODEL: {model} — {model_lens}" if model else ""
+    }
+    model_lens = model_lens_map.get(model, "evaluate long-term compounding potential")
+    model_context = ("\nBUSINESS MODEL: " + model + " — " + model_lens) if model else ""
 
     time_note = _market_time_context(market_overview, next_trading_day_label)
 
-    extra_context = "\n".join(x for x in [analyst_str, insider_str] if x)
-    prompt = f"""You are a long-term investment expert. Analyze {ticker} ({name}) and assign it ONE best-fit hold horizon.{time_note}
+    extra_lines = [x for x in [analyst_str, insider_str, earnings_str, range_str] if x]
+    extra_block = "\n".join(extra_lines)
 
-STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}{model_context}
-TA SIGNALS: {', '.join(signals) if signals else f'Day change: {change_pct_atm:+.1f}%'}
-FUNDAMENTALS: {fund_str}
-{extra_context + chr(10) if extra_context else ""}MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']}
-
-HOLD HORIZONS — choose the single best fit:
-- "1-3yr": near-term catalysts, valuation gap. Entry ±3%, Stop 10-15%, Target 20-50% upside. (Default levels: Entry ${h1_levels['entry_low']:.2f}–${h1_levels['entry_high']:.2f}, Stop ${h1_levels['stop_loss']:.2f}, Target ${h1_levels['target']:.2f})
-- "3-5yr": proven compounder, durable growth. Entry ±3%, Stop 15-25%, Target 50-120% upside. (Default: Entry ${h2_levels['entry_low']:.2f}–${h2_levels['entry_high']:.2f}, Stop ${h2_levels['stop_loss']:.2f}, Target ${h2_levels['target']:.2f})
-- "5-10yr": decade-long compounder/disruptor. Entry ±5%, Stop 30-40%, Target 150-400%. (Default: Entry ${h3_levels['entry_low']:.2f}–${h3_levels['entry_high']:.2f}, Stop ${h3_levels['stop_loss']:.2f}, Target ${h3_levels['target']:.2f})
-
-DECISION:
-- BUY: durable business, clear compounding path, attractive entry
-- HOLD: sound business but expensive or uncertain growth trajectory
-- AVOID: structural decline, broken economics, no pricing power — NOT merely because it lacks a platform moat
-
-trade_type must be: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative
-Each thesis sentence must cite at least one specific numeric value. Do NOT reference RSI, MACD, or VWAP.
-
-Respond ONLY with valid JSON, no markdown:
-{{
-  "ticker": "{ticker}",
-  "hold_horizon": "3-5yr",
-  "recommendation": "buy",
-  "trade_type": "compounder",
-  "entry_low": {h2_levels['entry_low']},
-  "entry_high": {h2_levels['entry_high']},
-  "stop_loss": {h2_levels['stop_loss']},
-  "target": {h2_levels['target']},
-  "risk_reward": "1:2.5",
-  "confidence": 7,
-  "thesis": "2 sentences with specific numeric data supporting the hold horizon and recommendation.",
-  "catalyst": "Specific event or development that could accelerate the thesis",
-  "key_risk": "Main risk that could permanently impair the thesis"
-}}"""
+    prompt = (
+        "You are a long-term investment expert. Analyze " + ticker + " (" + name
+        + ") and assign it ONE best-fit hold horizon." + time_note + "\n\n"
+        "STOCK: " + ticker + " | Price: $" + f"{price:.2f}" + " | Sector: " + sector + model_context + "\n"
+        "ATR-14: $" + f"{atr_14:.2f}" + " — calibrate stop distances to this, not fixed percentages\n\n"
+        "TECHNICAL ANALYSIS:\n" + ta_block + "\n\n"
+        "FUNDAMENTALS: " + fund_str + "\n"
+        + (extra_block + "\n" if extra_block else "")
+        + "MARKET: Bias " + regime["overall_bias"] + " | VIX " + str(regime["vix"]) + "\n\n"
+        "HOLD HORIZONS — choose the single best fit:\n"
+        '- "1-3yr": near-term catalysts, valuation gap. Stop ~2x ATR. Target 25-50%.'
+        " (Default: Entry $" + f"{h1_levels['entry_low']:.2f}" + "–$" + f"{h1_levels['entry_high']:.2f}"
+        + ", Stop $" + f"{h1_levels['stop_loss']:.2f}" + ", Target $" + f"{h1_levels['target']:.2f}" + ")\n"
+        '- "3-5yr": proven compounder, durable growth. Stop ~3.5x ATR. Target 50-120%.'
+        " (Default: Entry $" + f"{h2_levels['entry_low']:.2f}" + "–$" + f"{h2_levels['entry_high']:.2f}"
+        + ", Stop $" + f"{h2_levels['stop_loss']:.2f}" + ", Target $" + f"{h2_levels['target']:.2f}" + ")\n"
+        '- "5-10yr": decade-long compounder/disruptor. Stop ~5x ATR. Target 150-400%.'
+        " (Default: Entry $" + f"{h3_levels['entry_low']:.2f}" + "–$" + f"{h3_levels['entry_high']:.2f}"
+        + ", Stop $" + f"{h3_levels['stop_loss']:.2f}" + ", Target $" + f"{h3_levels['target']:.2f}" + ")\n\n"
+        "DECISION:\n"
+        "- BUY: durable business, clear compounding path, attractive entry\n"
+        "- HOLD: sound business but expensive or uncertain growth trajectory\n"
+        "- AVOID: structural decline, broken economics, no pricing power — NOT merely because it lacks a platform moat\n\n"
+        "trade_type must be: growth, value, dividend, turnaround, compounder, disruptor, platform, deep-tech, speculative\n"
+        "Write 3-4 thesis sentences, each citing a specific numeric value from the data above. Do NOT mention RSI, MACD, ATR, or VWAP in the thesis.\n\n"
+        "Respond ONLY with valid JSON, no markdown:\n"
+        "{\n"
+        '  "ticker": "' + ticker + '",\n'
+        '  "hold_horizon": "3-5yr",\n'
+        '  "recommendation": "buy",\n'
+        '  "trade_type": "compounder",\n'
+        "  \"entry_low\": " + str(h2_levels["entry_low"]) + ",\n"
+        "  \"entry_high\": " + str(h2_levels["entry_high"]) + ",\n"
+        "  \"stop_loss\": " + str(h2_levels["stop_loss"]) + ",\n"
+        "  \"target\": " + str(h2_levels["target"]) + ",\n"
+        '  "risk_reward": "1:2.5",\n'
+        '  "confidence": 7,\n'
+        '  "thesis": "3-4 sentences with specific numeric data from the data above.",\n'
+        '  "catalyst": "Specific event or development that could accelerate the thesis",\n'
+        '  "key_risk": "Main risk that could permanently impair the thesis"\n'
+        "}"
+    )
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=900))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1400))
 
     try:
         parsed = _parse_response(raw)
     except json.JSONDecodeError:
         parsed = {}
 
-    # Pick default levels based on assigned horizon
     hz = parsed.get("hold_horizon", "3-5yr")
     default_levels = h1_levels if hz == "1-3yr" else (h3_levels if hz == "5-10yr" else h2_levels)
 

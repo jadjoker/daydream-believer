@@ -1,7 +1,7 @@
 import os
 import httpx
 from typing import Optional, List, Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import asyncio
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
@@ -270,6 +270,39 @@ async def get_insider_summary(ticker: str) -> str:
     return "neutral"
 
 
+async def get_ticker_earnings_data(ticker: str) -> Optional[Dict]:
+    """Fetch EPS surprise history and next earnings date for a ticker."""
+    history_raw, calendar_raw = await asyncio.gather(
+        _get("/stock/earnings", {"symbol": ticker, "limit": "4"}),
+        _get("/calendar/earnings", {
+            "from": date.today().strftime("%Y-%m-%d"),
+            "to": (date.today() + timedelta(weeks=13)).strftime("%Y-%m-%d"),
+            "symbol": ticker,
+        }),
+        return_exceptions=True,
+    )
+
+    result: Dict = {}
+
+    if isinstance(history_raw, list) and history_raw:
+        history_raw.sort(key=lambda x: x.get("period", ""), reverse=True)
+        last = history_raw[0]
+        result["last_eps_actual"] = last.get("actual")
+        result["last_eps_estimate"] = last.get("estimate")
+        sp = last.get("surprisePercent")
+        result["last_surprise_pct"] = round(float(sp), 1) if sp is not None else None
+        result["last_eps_date"] = last.get("period")
+
+    if isinstance(calendar_raw, dict):
+        for e in calendar_raw.get("earningsCalendar", []):
+            if (e.get("symbol") or "").upper() == ticker.upper():
+                result["next_date"] = e.get("date")
+                result["next_eps_estimate"] = e.get("epsEstimate")
+                break
+
+    return result or None
+
+
 async def get_fundamentals_mapped(ticker: str) -> Optional[Dict]:
     """
     Fetch Finnhub basic financials and normalize to the same schema as
@@ -327,7 +360,7 @@ async def get_fundamentals_mapped(ticker: str) -> Optional[Dict]:
         "target_low": None,
         "target_high": None,
         "short_float": None,
-        "short_ratio": None,
+        "short_ratio": m.get("shortInterestRatio") or m.get("shortRatioAnnual"),
         "insider_pct": None,
         "institution_pct": None,
     }
