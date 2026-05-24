@@ -454,8 +454,8 @@ function PicksPanel({
 // ─── Root component ───────────────────────────────────────────────────────────
 
 // Polling interval and max wait before giving up
-const POLL_INTERVAL_MS = 6000;
-const MAX_WAIT_MS = 480_000; // 8 minutes
+const POLL_INTERVAL_MS = 4000;
+const MAX_WAIT_MS = 120_000; // 2 minutes
 
 type Phase = "checking" | "generating" | "ready" | "error";
 
@@ -497,7 +497,7 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
           return;
         }
         // If generation stopped but no picks → it failed
-        if (!s.generating && Date.now() - startRef.current > 60_000) {
+        if (!s.generating && Date.now() - startRef.current > 20_000) {
           stopPoll();
           stopTimer();
           setErrorMsg("Generation failed — please retry.");
@@ -553,10 +553,10 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
     setRunKey((k) => k + 1);
   };
 
-  const generatingMsg = loadingSeconds > 90
+  const generatingMsg = loadingSeconds > 45
     ? "Almost there…"
-    : loadingSeconds > 10
-    ? `Generating… ${loadingSeconds}s — this takes ~90–120s`
+    : loadingSeconds > 5
+    ? `Generating… ${loadingSeconds}s`
     : "Generating picks…";
 
   return (

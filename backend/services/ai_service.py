@@ -645,6 +645,254 @@ def _parse_response(raw: str) -> Dict:
     raise json.JSONDecodeError("No valid JSON found", text, 0)
 
 
+# ─── Quick picks: Claude selects from registry + Finnhub live prices ──────────
+# (ticker, full_name, category, one-line description)
+_COMPANY_REGISTRY: Dict[str, tuple] = {
+    # ── Long-term ──────────────────────────────────────────────────────────────
+    "AAPL":  ("Apple",                "long_term",  "iPhone/Mac ecosystem + services, 94% gross margin on services"),
+    "MSFT":  ("Microsoft",            "long_term",  "Azure cloud #2 globally, Copilot AI across all products"),
+    "GOOGL": ("Alphabet",             "long_term",  "Search + YouTube + Google Cloud, Gemini AI integration"),
+    "NVDA":  ("Nvidia",               "long_term",  "AI GPU monopoly, H100/Blackwell, data center + robotics"),
+    "META":  ("Meta Platforms",       "long_term",  "Facebook/Instagram/WhatsApp + Reels growth, AI ad targeting"),
+    "AMZN":  ("Amazon",               "long_term",  "AWS cloud leader + e-commerce + ads, expanding operating margins"),
+    "TSLA":  ("Tesla",                "long_term",  "EV + energy storage + Full Self-Driving, robotaxi optionality"),
+    "AMD":   ("AMD",                  "long_term",  "MI300x data center GPUs + EPYC CPUs, market share gains vs Intel"),
+    "CRM":   ("Salesforce",           "long_term",  "CRM SaaS leader, Agentforce AI agents, >$34B ARR"),
+    "NOW":   ("ServiceNow",           "long_term",  "enterprise workflow SaaS, AI platform upsell, >99% renewal rates"),
+    "PLTR":  ("Palantir",             "long_term",  "AIP AI platform, government + commercial data analytics"),
+    "DDOG":  ("Datadog",              "long_term",  "cloud monitoring + security SaaS, land-and-expand NRR >120%"),
+    "NET":   ("Cloudflare",           "long_term",  "networking + zero-trust security platform, Workers AI"),
+    "SNOW":  ("Snowflake",            "long_term",  "cloud data warehouse, Cortex AI, Iceberg tables growth"),
+    "NFLX":  ("Netflix",              "long_term",  "streaming leader, ad tier scaling, live sports + games"),
+    "UBER":  ("Uber",                 "long_term",  "rides + delivery global marketplace, improving EBITDA margins"),
+    "COIN":  ("Coinbase",             "long_term",  "leading US crypto exchange, base L2, institutional custody"),
+    "V":     ("Visa",                 "long_term",  "global payment network, 80%+ operating margin, pricing power"),
+    "MA":    ("Mastercard",           "long_term",  "global payment network, value-added services, international mix"),
+    "QCOM":  ("Qualcomm",             "long_term",  "5G modem leader, Snapdragon AI edge chips, automotive design wins"),
+    "AI":    ("C3.ai",                "long_term",  "enterprise AI software platform, pilot-to-production momentum"),
+    "LLY":   ("Eli Lilly",            "long_term",  "GLP-1 drugs Mounjaro/Zepbound, massive obesity market TAM"),
+    "ABBV":  ("AbbVie",               "long_term",  "Skyrizi/Rinvoq offsetting Humira biosimilar pressure"),
+    "UNH":   ("UnitedHealth Group",   "long_term",  "largest US managed care + Optum health services platform"),
+    "JPM":   ("JPMorgan Chase",       "long_term",  "largest US bank, AI adoption leader, consistent capital return"),
+    "GS":    ("Goldman Sachs",        "long_term",  "investment banking rebound cycle, asset/wealth management growing"),
+    "WMT":   ("Walmart",              "long_term",  "retail dominance + e-commerce acceleration, ad business scaling"),
+    "CAVA":  ("Cava Group",           "long_term",  "fast-casual Mediterranean, same-store sales +14%, rapid expansion"),
+    "ONON":  ("On Running",           "long_term",  "premium running/lifestyle brand, 30%+ revenue growth, DTC mix rising"),
+    "XOM":   ("ExxonMobil",           "long_term",  "oil/gas major, Pioneer acquisition synergies, strong FCF dividend"),
+    "CVX":   ("Chevron",              "long_term",  "oil/gas major, Hess acquisition, consistent buyback program"),
+    # ── Bargain ($5–$20) ──────────────────────────────────────────────────────
+    "SOFI":  ("SoFi Technologies",    "bargain",    "digital bank + financial services, bank charter, growing deposits"),
+    "NU":    ("Nu Holdings",          "bargain",    "fastest-growing LatAm neobank, 100M+ customers, Brazil focus"),
+    "PAYO":  ("Payoneer",             "bargain",    "B2B cross-border payments for SMBs + gig economy"),
+    "GDOT":  ("Green Dot",            "bargain",    "banking-as-a-service, prepaid cards, steady FCF generation"),
+    "SNAP":  ("Snap Inc",             "bargain",    "social media + AR glasses, improving ARPU, Spotlight growth"),
+    "PATH":  ("UiPath",               "bargain",    "RPA automation SaaS, enterprise AI agents, strong ARR"),
+    "FRSH":  ("Freshworks",           "bargain",    "CRM/support SaaS for SMBs, land-and-expand, improving margins"),
+    "CLBT":  ("Cellebrite",           "bargain",    "digital intelligence SaaS for law enforcement, sticky gov contracts"),
+    "SOUN":  ("SoundHound AI",        "bargain",    "voice AI platform, automotive + restaurant licensing RPO growing"),
+    "IONQ":  ("IonQ",                 "bargain",    "quantum computing trapped-ion leader, DoD + AWS contracts"),
+    "JOBY":  ("Joby Aviation",        "bargain",    "FAA-certified eVTOL air taxi, Toyota-backed, delta air lines partner"),
+    "ERIC":  ("Ericsson",             "bargain",    "5G network equipment leader, cheap valuation vs peers, restructuring"),
+    "NOK":   ("Nokia",                "bargain",    "5G IP portfolio + network infrastructure, recovering margins"),
+    "F":     ("Ford Motor",           "bargain",    "EV + ICE auto, single-digit P/E, strong dividend yield"),
+    "FTRE":  ("Fortrea",              "bargain",    "CRO spun from LabCorp, clinical trial services, growing backlog"),
+    "MDXG":  ("MiMedx",              "bargain",    "regenerative medicine amniotic tissue, improving gross margins"),
+    "LBRT":  ("Liberty Energy",       "bargain",    "oilfield services, hydraulic fracturing, FCF-positive operations"),
+    "PARA":  ("Paramount Global",     "bargain",    "Skydance merger complete, streaming + Paramount+ IP library"),
+    "KSS":   ("Kohl's",               "bargain",    "discount department retailer, strong FCF, high dividend yield"),
+    "WBA":   ("Walgreens Boots",      "bargain",    "pharmacy network turnaround, store closures streamlining ops"),
+    "TASK":  ("TaskUs",               "bargain",    "AI-enabled BPO, growing enterprise digital experience contracts"),
+    "CTLP":  ("Cantaloupe",           "bargain",    "unattended retail IoT + SaaS, growing subscription revenue mix"),
+    # ── Hidden Gems ───────────────────────────────────────────────────────────
+    "FROG":  ("JFrog",                "hidden_gem", "universal DevOps artifact management SaaS, security + MLOps"),
+    "CFLT":  ("Confluent",            "hidden_gem", "real-time data streaming platform (Kafka cloud), developer-led"),
+    "WK":    ("Workiva",              "hidden_gem", "financial reporting + ESG compliance SaaS, sticky enterprise"),
+    "ACMR":  ("ACM Research",         "hidden_gem", "advanced wafer cleaning equipment, single-wafer processing leader"),
+    "SMTC":  ("Semtech",              "hidden_gem", "LoRa IoT connectivity chips + data center optical transceivers"),
+    "ALGM":  ("Allegro MicroSystems", "hidden_gem", "sensing + power ICs for automotive/industrial, EV exposure"),
+    "COHU":  ("Cohu",                 "hidden_gem", "semiconductor test handlers, cyclical upcycle beneficiary"),
+    "AMBA":  ("Ambarella",            "hidden_gem", "edge AI video processing SoCs, automotive camera leader"),
+    "FLYW":  ("Flywire",              "hidden_gem", "vertical payment software for education + healthcare, global"),
+    "PRCT":  ("Procept BioRobotics",  "hidden_gem", "robotic BPH prostate surgery system, high ASP + razor-blade model"),
+    "NVST":  ("Envista Holdings",     "hidden_gem", "dental equipment + consumables, turnaround, margin expansion"),
+    "LMAT":  ("LeMaitre Vascular",    "hidden_gem", "specialty vascular surgical devices, consistent compounder"),
+    "AAON":  ("AAON Inc",             "hidden_gem", "HVAC manufacturer, 20%+ operating margins, founder-led culture"),
+    "CRVL":  ("CorVel Corp",          "hidden_gem", "risk management + workers comp SaaS, 40-year track record"),
+    "JAMF":  ("JAMF Holding",         "hidden_gem", "Apple device management SaaS, education + enterprise"),
+    "WEAV":  ("Weave Communications", "hidden_gem", "patient + SMB communications SaaS, vertical CRM focus"),
+}
+
+
+def _build_quick_picks_prompt(market_overview: Dict, date_str: str) -> str:
+    regime = assess_market_regime(market_overview)
+    time_note = _market_time_context(market_overview, "the next session")
+    vix  = market_overview.get("vix") or 20
+    spy_c = market_overview.get("spy_change_pct") or 0
+    qqq_c = market_overview.get("qqq_change_pct") or 0
+
+    macro_parts = [f"SPY {spy_c:+.1f}% | QQQ {qqq_c:+.1f}% | VIX {vix:.1f}",
+                   regime["direction"]]
+    if regime.get("sector_rotation"):   macro_parts.append(regime["sector_rotation"])
+    if regime.get("yield_context"):     macro_parts.append(regime["yield_context"])
+    if regime.get("macro_stats"):       macro_parts.append(regime["macro_stats"])
+    if regime.get("upcoming_events"):   macro_parts.append(f"Risk events: {regime['upcoming_events']}")
+    macro_block = "\n".join(macro_parts)
+
+    def section(cat):
+        return "\n".join(
+            f"  {t}: {name} — {desc}"
+            for t, (name, c, desc) in _COMPANY_REGISTRY.items() if c == cat
+        )
+
+    return f"""You are an expert long-term investment advisor. Today is {date_str}.{time_note}
+
+MARKET:
+{macro_block}
+
+INVESTMENT UNIVERSE — select ONLY tickers listed below:
+
+LONG-TERM (quality compounders, 6–18 month holds):
+{section("long_term")}
+
+BARGAIN ($5–$20 stocks, value + turnaround, 6–12 month holds):
+{section("bargain")}
+
+HIDDEN GEMS (small/mid-cap under-the-radar, 12–24 month holds):
+{section("hidden_gem")}
+
+YOUR JOB:
+1. Select exactly 3 LONG-TERM, 3 BARGAIN, 3 HIDDEN GEM picks (9 total)
+2. Base selection on company quality, business fundamentals, and current macro regime
+3. For each pick:
+   - stop_pct: stop distance below entry (e.g. 0.12 = 12%)
+   - target_pct: upside to 12-month target (e.g. 0.30 = 30%)
+   - thesis: 2 sentences with SPECIFIC data (revenue %, margins, market position, valuation)
+   - catalyst: one specific near-term trigger
+   - key_risk: one main downside risk
+   - confidence: 1–10 (above 7 = conviction play with strong fundamental thesis)
+   - trade_type: growth | value | dividend | turnaround | compounder | disruptor | platform | deep-tech | speculative
+4. ONLY pick tickers from the lists above — no others
+
+Respond ONLY with valid JSON, no markdown:
+{{
+  "market_summary": "2 sentences on market conditions for the next session referencing VIX {vix:.0f}",
+  "bias": "bullish",
+  "picks": [
+    {{
+      "rank": 1,
+      "ticker": "MSFT",
+      "category": "long_term",
+      "trade_type": "compounder",
+      "stop_pct": 0.12,
+      "target_pct": 0.28,
+      "confidence": 8,
+      "thesis": "Azure grew 31% YoY in fiscal Q2 2025 and Copilot is now embedded in 365 plans used by 70% of Fortune 500. At ~30x forward earnings with 15% EPS growth, this is a best-in-class compounder at a reasonable price.",
+      "catalyst": "Fiscal Q3 2025 earnings — Azure acceleration above 33% expected",
+      "key_risk": "AI capex inflation compresses near-term FCF and margin expansion slows"
+    }}
+  ],
+  "generated_at": "{date_str}"
+}}"""
+
+
+async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> Dict:
+    """
+    Fast picks: Claude selects 3 per category from registry (training knowledge),
+    then Finnhub provides live prices for entry/stop/target. ~30s total, no Yahoo Finance.
+    """
+    from services import finnhub_service
+
+    regime = assess_market_regime(market_overview)
+
+    prompt = _build_quick_picks_prompt(market_overview, date_str)
+    loop = asyncio.get_running_loop()
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=2800))
+
+    try:
+        parsed = _parse_response(raw)
+    except json.JSONDecodeError:
+        return {
+            "picks": [], "market_summary": "Analysis temporarily unavailable.",
+            "bias": regime["overall_bias"], "generated_at": date_str,
+        }
+
+    picks_raw = parsed.get("picks", [])
+    if not picks_raw:
+        return {
+            "picks": [], "market_summary": parsed.get("market_summary", ""),
+            "bias": parsed.get("bias", regime["overall_bias"]), "generated_at": date_str,
+        }
+
+    # Validate tickers against registry
+    valid_tickers = [
+        p["ticker"].upper() for p in picks_raw
+        if p.get("ticker") and p["ticker"].upper() in _COMPANY_REGISTRY
+    ]
+
+    # Fetch live Finnhub quotes for selected tickers only
+    quote_results = await _batch_gather(
+        [finnhub_service.get_quote(t) for t in valid_tickers],
+        batch_size=3, delay=0.5,
+    )
+    quote_map = {
+        t: q for t, q in zip(valid_tickers, quote_results)
+        if isinstance(q, dict) and q.get("price")
+    }
+
+    final_picks = []
+    for p in picks_raw:
+        ticker = (p.get("ticker") or "").upper()
+        if ticker not in _COMPANY_REGISTRY:
+            continue
+
+        q = quote_map.get(ticker, {})
+        price = q.get("price", 0) or 0
+
+        stop_pct   = max(0.05, min(0.35, float(p.get("stop_pct")   or 0.12)))
+        target_pct = max(0.10, min(1.50, float(p.get("target_pct") or 0.25)))
+
+        if price:
+            entry_low  = round(price * 0.990, 2)
+            entry_high = round(price * 1.015, 2)
+            stop_loss  = round(entry_low * (1 - stop_pct), 2)
+            target     = round(entry_low * (1 + target_pct), 2)
+            risk       = max(entry_low - stop_loss, 0.01)
+            reward     = max(target - entry_low, 0)
+            rr         = f"1:{reward/risk:.1f}" if risk > 0 else "—"
+        else:
+            entry_low = entry_high = stop_loss = target = 0
+            rr = "—"
+
+        reg = _COMPANY_REGISTRY[ticker]
+        category = p.get("category", reg[1])
+        if category not in ("long_term", "bargain", "hidden_gem"):
+            category = reg[1]
+
+        final_picks.append({
+            "rank":        len(final_picks) + 1,
+            "ticker":      ticker,
+            "name":        reg[0],
+            "category":    category,
+            "trade_type":  p.get("trade_type", "growth"),
+            "entry_low":   entry_low,
+            "entry_high":  entry_high,
+            "stop_loss":   stop_loss,
+            "target":      target,
+            "risk_reward": rr,
+            "confidence":  max(1, min(10, int(p.get("confidence") or 7))),
+            "thesis":      p.get("thesis", ""),
+            "catalyst":    p.get("catalyst", ""),
+            "key_risk":    p.get("key_risk", ""),
+        })
+
+    return {
+        "picks":          final_picks,
+        "market_summary": parsed.get("market_summary", ""),
+        "bias":           parsed.get("bias", regime["overall_bias"]),
+        "generated_at":   date_str,
+    }
+
+
 async def generate_market_picks(
     market_overview: Dict,
     screener_results: List[Dict],
@@ -854,19 +1102,16 @@ def _compute_support_entry(price: float, bars: list) -> tuple:
 
 async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = None) -> List[Dict]:
     """
-    Enrich candidates with the same full data pipeline used in single-ticker analysis:
-    TA signals, ATR-based stops, 52-week range, analyst consensus + target range,
-    insider signal, and earnings date + EPS surprise.
+    Enrich candidates with analyst consensus, insider signal, support-based entry zone,
+    and earnings context. Finnhub-only — no Yahoo Finance.
     """
     if not candidates:
         return candidates
     from services import finnhub_service
-    from services.technical_analysis import get_technical_signals
     from datetime import date as _date
 
     tickers = [c["ticker"] for c in candidates]
 
-    # Sequential batches to stay within Finnhub 60-call/min free-tier limit
     analyst_results = await _batch_gather(
         [finnhub_service.get_analyst_summary(t) for t in tickers],
         batch_size=3, delay=1.2,
@@ -879,31 +1124,26 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
         [finnhub_service.get_candles(t, period="3mo", interval="1d") for t in tickers],
         batch_size=3, delay=1.2,
     )
-    ta_results = await _batch_gather(
-        [get_technical_signals(t, period="1y", interval="1d") for t in tickers],
-        batch_size=3, delay=0.8,
-    )
     earnings_results = await _batch_gather(
         [finnhub_service.get_ticker_earnings_data(t) for t in tickers],
         batch_size=3, delay=1.0,
     )
 
-    for c, analyst, insider, bars, ta, earnings in zip(
-        candidates, analyst_results, insider_results, candle_results, ta_results, earnings_results
+    for c, analyst, insider, bars, earnings in zip(
+        candidates, analyst_results, insider_results, candle_results, earnings_results
     ):
         a         = analyst  if isinstance(analyst,  dict) else {}
         ins       = insider  if isinstance(insider,  str)  else ""
         bars_list = bars     if isinstance(bars,     list) else []
-        ta_data   = ta       if isinstance(ta,       dict) else {}
         earn_data = earnings if isinstance(earnings, dict) else {}
 
         price = c.get("price", 0)
 
-        # ── ATR from TA (fallback to 2% of price) ────────────────────────────
-        atr_14 = ta_data.get("atr_14") or (price * 0.02)
+        # ATR fallback: 2% of price (no Yahoo Finance TA)
+        atr_14 = price * 0.02
         c["atr_14"] = atr_14
 
-        # ── Support-based entry zone ──────────────────────────────────────────
+        # ── Support-based entry zone (from Finnhub candles) ───────────────────
         if price and bars_list:
             entry_low, entry_high, entry_method = _compute_support_entry(price, bars_list)
             c["entry_low"]    = entry_low
@@ -913,41 +1153,12 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
             entry_low = c.get("entry_low", round(price * 0.97, 2))
             c["entry_method"] = "near current price"
 
-        # ── ATR-calibrated stop (replaces flat 0.88) ──────────────────────────
         c["stop_loss"] = round(max(entry_low - 2.0 * atr_14, entry_low * 0.82), 2)
         target_price = c.get("target", price * 1.40)
         risk   = max(entry_low - c["stop_loss"], 0.01)
         reward = max(target_price - entry_low, 0)
         c["rr"] = round(reward / risk, 1)
-
-        # ── TA signal summary ─────────────────────────────────────────────────
-        ta_parts = []
-        if ta_data:
-            sig = ta_data.get("signal_summary", "")
-            rsi = ta_data.get("rsi_14")
-            adx = ta_data.get("adx")
-            ema50 = ta_data.get("ema_50")
-            sma200 = ta_data.get("sma_200")
-            rel_vol = ta_data.get("rel_volume")
-            bull_sigs = ta_data.get("bull_signals", [])
-            bear_sigs = ta_data.get("bear_signals", [])
-            if sig:
-                ta_parts.append(sig)
-            if rsi is not None:
-                ta_parts.append(f"RSI {rsi:.0f}")
-            if adx is not None:
-                ta_parts.append(f"ADX {adx:.0f}")
-            if ema50 and sma200 and price:
-                cross = "GoldenX" if ema50 > sma200 else "DeathX"
-                pct = (price - sma200) / sma200 * 100
-                ta_parts.append(f"{cross} ({pct:+.1f}% vs SMA200)")
-            if rel_vol and rel_vol > 1.5:
-                ta_parts.append(f"RelVol {rel_vol:.1f}x")
-            if bull_sigs:
-                ta_parts.append("Bull: " + "; ".join(bull_sigs[:2]))
-            if bear_sigs:
-                ta_parts.append("Bear: " + "; ".join(bear_sigs[:2]))
-        c["ta_summary"] = " | ".join(ta_parts) if ta_parts else ""
+        c["ta_summary"] = ""
 
         # ── 52-week range ─────────────────────────────────────────────────────
         w52h = c.get("week_52_high")

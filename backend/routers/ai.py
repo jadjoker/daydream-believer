@@ -147,17 +147,14 @@ async def _inner_generate_all_picks() -> dict:
             **({"debug_error": err[:500]} if err else {}),
         }
 
-    # Phase 3: generate unified picks
+    # Generate picks: Claude selects from curated registry + Finnhub live prices (~30s)
     try:
-        unified_result = await ai_service.generate_market_picks(
+        unified_result = await ai_service.generate_quick_unified_picks(
             market_overview=market_data,
-            screener_results=[],
             date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode="unified",
         )
         if not isinstance(unified_result, dict):
-            unified_result = _error_result("generate_market_picks returned non-dict")
+            unified_result = _error_result("generate_quick_unified_picks returned non-dict")
     except Exception as exc:
         import traceback
         err_str = traceback.format_exc()
@@ -215,13 +212,19 @@ async def get_ai_picks(
         date_str = now.strftime("%Y-%m-%d %H:%M ET")
         next_trading_day_label, next_trading_day_date = _next_trading_day(now)
 
-        result = await ai_service.generate_market_picks(
-            market_overview=market_data,
-            screener_results=[],
-            date_str=date_str,
-            next_trading_day_label=next_trading_day_label,
-            mode=mode,
-        )
+        if mode == "unified":
+            result = await ai_service.generate_quick_unified_picks(
+                market_overview=market_data,
+                date_str=date_str,
+            )
+        else:
+            result = await ai_service.generate_market_picks(
+                market_overview=market_data,
+                screener_results=[],
+                date_str=date_str,
+                next_trading_day_label=next_trading_day_label,
+                mode=mode,
+            )
         result["next_trading_day_label"] = "Long-Term Picks"
         result["next_trading_day_date"] = None
         result["mode"] = mode
