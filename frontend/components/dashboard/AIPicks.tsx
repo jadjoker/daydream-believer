@@ -31,6 +31,20 @@ export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
   return <AllPicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
 }
 
+function timeAgo(generatedAt: string): string {
+  // Format: "2026-05-24 12:09 ET"
+  const match = generatedAt.match(/(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/);
+  if (!match) return "";
+  const dt = new Date(`${match[1]}T${match[2]}:00-04:00`); // EDT
+  if (isNaN(dt.getTime())) return "";
+  const diffMin = Math.floor((Date.now() - dt.getTime()) / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return `${Math.floor(diffHr / 24)}d ago`;
+}
+
 // ─── Price tile ───────────────────────────────────────────────────────────────
 
 function PriceTile({ label, value, className }: { label: string; value: string; className?: string }) {
@@ -549,8 +563,15 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
   const handleRefresh = async () => {
     stopPoll();
     stopTimer();
+    setPhase("generating");
+    setPicksData(null);
+    setErrorMsg(null);
+    setLoadingSeconds(0);
+    startRef.current = Date.now();
+    timerRef.current = setInterval(() => setLoadingSeconds((n) => n + 1), 1000);
     try { await api.aiRefresh(); } catch {}
-    setRunKey((k) => k + 1);
+    startPolling();
+    // Intentionally NOT calling setRunKey — avoids triggering useEffect which would fire a second aiRefresh()
   };
 
   const generatingMsg = loadingSeconds > 45
@@ -559,27 +580,33 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
     ? `Generating… ${loadingSeconds}s`
     : "Generating picks…";
 
+  const cacheAge = phase === "ready" && picksData?.unified?.generated_at
+    ? timeAgo(picksData.unified.generated_at)
+    : null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
           <span className="text-sm font-semibold text-zinc-200">AI Picks</span>
-          {phase === "ready" && picksData && (
-            <span className="text-[10px] text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">
-              {picksData.unified?.generated_at ?? ""}
-            </span>
-          )}
         </div>
-        <div className="flex flex-col items-end gap-0.5">
+        <div className="flex items-center gap-2">
           {phase === "ready" && (
-            <button
-              onClick={handleRefresh}
-              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors"
-            >
-              <RefreshCw size={12} />
-              Refresh
-            </button>
+            <>
+              {cacheAge && (
+                <span className="text-[10px] text-zinc-600">
+                  {cacheAge}
+                </span>
+              )}
+              <button
+                onClick={handleRefresh}
+                className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors"
+              >
+                <RefreshCw size={12} />
+                Refresh
+              </button>
+            </>
           )}
           {(phase === "checking" || phase === "generating") && (
             <span className="flex items-center gap-1.5 text-xs text-zinc-500">

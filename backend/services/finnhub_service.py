@@ -29,9 +29,12 @@ async def get_quote(ticker: str) -> Optional[Dict]:
     if cached is not None:
         return cached
     data = await _get("/quote", {"symbol": ticker})
-    if not data or not data.get("c"):
+    if not data:
         return None
-    price = data["c"]
+    # "c" is 0 when market is closed — fall back to previous close so picks always have a price
+    price = data.get("c") or data.get("pc") or 0
+    if not price:
+        return None
     prev  = data.get("pc") or price
     chg   = data.get("d", 0) or 0
     chg_p = data.get("dp", 0) or 0

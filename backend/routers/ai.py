@@ -21,6 +21,8 @@ _PICKS_TTL    = None  # picks never expire — manual refresh only
 # Prevent duplicate concurrent generation
 _picks_lock = asyncio.Lock()
 _is_generating: bool = False
+_last_refresh_ts: float = 0.0
+_REFRESH_COOLDOWN = 60.0  # seconds between manual refreshes
 
 
 def _next_trading_day(now: datetime) -> tuple[str, str]:
@@ -303,13 +305,38 @@ async def refresh_ai_picks():
     Clear the picks cache and fire a background regeneration.
     Returns immediately — frontend can poll /ai/picks-status or just call /ai/picks-all
     (which will block until the new picks are ready).
+    60-second cooldown prevents rapid retries from each triggering a Claude API call.
     """
+    global _last_refresh_ts
+    now = time.time()
+    elapsed = now - _last_refresh_ts
+    if elapsed < _REFRESH_COOLDOWN:
+        remaining = int(_REFRESH_COOLDOWN - elapsed)
+        return {"status": "cooldown", "cooldown_seconds": remaining,
+                "message": f"Please wait {remaining}s before refreshing again"}
+    _last_refresh_ts = now
     delete_cached("ai_picks_all")
     delete_cached("ai_picks_all_full")
     for mode in ("unified", "long", "discovery"):
         delete_cached(f"ai_picks_{mode}")
     asyncio.create_task(background_refresh_picks())
     return {"status": "refreshing", "message": "AI picks refresh started in background"}
+
+
+@router.post("/force-refresh")
+async def force_refresh_ai_picks():
+    """
+    Clear picks cache and regenerate, bypassing the 60-second cooldown.
+    Use when existing picks have bad data (e.g. $0 prices).
+    """
+    global _last_refresh_ts
+    delete_cached("ai_picks_all")
+    delete_cached("ai_picks_all_full")
+    for mode in ("unified", "long", "discovery"):
+        delete_cached(f"ai_picks_{mode}")
+    _last_refresh_ts = time.time()
+    asyncio.create_task(background_refresh_picks())
+    return {"status": "refreshing", "message": "Force-refresh started"}
 
 
 @router.post("/clear-mode/{mode}")
