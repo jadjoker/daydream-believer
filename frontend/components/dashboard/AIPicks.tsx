@@ -455,7 +455,7 @@ function PicksPanel({
 
 // Polling interval and max wait before giving up
 const POLL_INTERVAL_MS = 6000;
-const MAX_WAIT_MS = 300_000; // 5 minutes
+const MAX_WAIT_MS = 480_000; // 8 minutes
 
 type Phase = "checking" | "generating" | "ready" | "error";
 

@@ -82,6 +82,11 @@ _PERIOD_MAP = {
 
 async def get_candles(ticker: str, period: str = "3mo", interval: str = "1d") -> List[Dict]:
     """OHLCV candles from Finnhub. Returns same shape as yahoo_finance.get_ohlcv."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_candles:{ticker.upper()}:{period}:{interval}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
     resolution, days = _PERIOD_MAP.get((period, interval), ("D", 95))
     now = int(datetime.utcnow().timestamp())
     frm = int((datetime.utcnow() - timedelta(days=days)).timestamp())
@@ -98,6 +103,8 @@ async def get_candles(ticker: str, period: str = "3mo", interval: str = "1d") ->
             "close":  round(data["c"][i], 4),
             "volume": float(data["v"][i]),
         })
+    if bars:
+        set_cached(_key, bars, ttl=3600)
     return bars
 
 
@@ -245,6 +252,11 @@ async def get_market_news_sentiment(ticker: str) -> Optional[Dict]:
 
 async def get_analyst_summary(ticker: str) -> Dict:
     """Fetch analyst price target and buy/hold/sell consensus. Returns compact dict."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_analyst:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
     pt, recs = await asyncio.gather(
         get_price_target(ticker),
         get_recommendation_trends(ticker),
@@ -265,11 +277,18 @@ async def get_analyst_summary(ticker: str) -> Dict:
         result["analyst_buy"] = buy
         result["analyst_hold"] = hold
         result["analyst_sell"] = sell
+    if result:
+        set_cached(_key, result, ttl=3600)
     return result
 
 
 async def get_insider_summary(ticker: str) -> str:
     """Returns 'buying', 'selling', or 'neutral' based on recent insider MSPR."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_insider:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
     data = await get_insider_sentiment(ticker)
     if not isinstance(data, dict):
         return ""
@@ -279,14 +298,22 @@ async def get_insider_summary(ticker: str) -> str:
     recent = items[-3:] if len(items) >= 3 else items
     net = sum(float(item.get("mspr") or 0) for item in recent)
     if net > 0.05:
-        return "buying"
+        result = "buying"
     elif net < -0.05:
-        return "selling"
-    return "neutral"
+        result = "selling"
+    else:
+        result = "neutral"
+    set_cached(_key, result, ttl=3600)
+    return result
 
 
 async def get_ticker_earnings_data(ticker: str) -> Optional[Dict]:
     """Fetch EPS surprise history and next earnings date for a ticker."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_earnings:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
     history_raw, calendar_raw = await asyncio.gather(
         _get("/stock/earnings", {"symbol": ticker, "limit": "4"}),
         _get("/calendar/earnings", {
@@ -315,6 +342,8 @@ async def get_ticker_earnings_data(ticker: str) -> Optional[Dict]:
                 result["next_eps_estimate"] = e.get("epsEstimate")
                 break
 
+    if result:
+        set_cached(_key, result, ttl=86400)
     return result or None
 
 

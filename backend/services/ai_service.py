@@ -303,58 +303,34 @@ EQUITY_UNIVERSE: List[tuple] = [
     ("AMZN",  "mega"),
     ("TSLA",  "mega"),
     ("AMD",   "mega"),
-    ("AVGO",  "mega"),
-    ("ORCL",  "mega"),
     # ── SaaS / Enterprise software ────────────────────────────────────────────
     ("CRM",   "saas"),
-    ("ADBE",  "saas"),
     ("NOW",   "saas"),
     ("PLTR",  "saas"),
-    ("SNOW",  "saas"),
     ("DDOG",  "saas"),
-    ("MDB",   "saas"),
     ("NET",   "saas"),
-    ("ZS",    "saas"),
+    ("SNOW",  "saas"),
     # ── Platform / marketplace ────────────────────────────────────────────────
     ("NFLX",  "platform"),
     ("UBER",  "platform"),
-    ("SPOT",  "platform"),
     ("COIN",  "platform"),
-    ("DUOL",  "platform"),
-    ("SE",    "platform"),
-    ("DIS",   "platform"),
     # ── Fintech ───────────────────────────────────────────────────────────────
     ("V",     "fintech"),
     ("MA",    "fintech"),
-    ("AXP",   "fintech"),
-    # ── Deep tech / Semiconductors / Clean energy ─────────────────────────────
+    # ── Deep tech / Semiconductors ────────────────────────────────────────────
     ("QCOM",  "deeptech"),
     ("AI",    "deeptech"),
-    ("FSLR",  "deeptech"),
     # ── Healthcare ────────────────────────────────────────────────────────────
-    ("UNH",   "healthcare"),
     ("LLY",   "healthcare"),
     ("ABBV",  "healthcare"),
-    ("JNJ",   "healthcare"),
-    ("MRK",   "healthcare"),
-    ("TMO",   "healthcare"),
-    ("ISRG",  "healthcare"),
+    ("UNH",   "healthcare"),
     # ── Financials ────────────────────────────────────────────────────────────
     ("JPM",   "financial"),
-    ("BAC",   "financial"),
     ("GS",    "financial"),
     # ── Consumer ──────────────────────────────────────────────────────────────
-    ("PG",    "consumer"),
-    ("KO",    "consumer"),
-    ("PEP",   "consumer"),
     ("WMT",   "consumer"),
-    ("COST",  "consumer"),
-    ("MCD",   "consumer"),
-    ("NKE",   "consumer"),
     ("CAVA",  "consumer"),
     ("ONON",  "consumer"),
-    # ── Industrials ───────────────────────────────────────────────────────────
-    ("CAT",   "industrial"),
     # ── Energy ────────────────────────────────────────────────────────────────
     ("XOM",   "energy"),
     ("CVX",   "energy"),
@@ -682,14 +658,17 @@ async def generate_market_picks(
 
     if mode == "unified":
         try:
-            lt_cands, bg_cands, un_cands = await asyncio.gather(
-                screen_longterm_candidates(top_n=5,  earnings_lookup=earnings_lookup),
-                screen_bargain_candidates(top_n=4,   earnings_lookup=earnings_lookup),
-                screen_unknowns_candidates(top_n=5,  earnings_lookup=earnings_lookup),
-                return_exceptions=True,
-            )
+            lt_cands = await screen_longterm_candidates(top_n=5, earnings_lookup=earnings_lookup)
         except Exception:
-            lt_cands, bg_cands, un_cands = [], [], []
+            lt_cands = []
+        try:
+            bg_cands = await screen_bargain_candidates(top_n=4, earnings_lookup=earnings_lookup)
+        except Exception:
+            bg_cands = []
+        try:
+            un_cands = await screen_unknowns_candidates(top_n=5, earnings_lookup=earnings_lookup)
+        except Exception:
+            un_cands = []
 
         lt = lt_cands if isinstance(lt_cands, list) else []
         bg = bg_cands if isinstance(bg_cands, list) else []
@@ -1029,9 +1008,13 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
 
 
 async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = None) -> List[Dict]:
-    now = time.time()
-    if _longterm_cache["ts"] and (now - _longterm_cache["ts"]) < _FUND_CACHE_TTL and _longterm_cache["data"]:
-        return _longterm_cache["data"][:top_n]
+    from services.cache_service import get_cached, set_cached
+    _ck = "screener:longterm"
+    cached = get_cached(_ck)
+    if cached is not None:
+        _longterm_cache["ts"] = time.time()
+        _longterm_cache["data"] = cached
+        return cached[:top_n]
 
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
@@ -1039,8 +1022,8 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
     all_tickers = [t for t, _ in EQUITY_UNIVERSE]
     model_map = EQUITY_MODEL
 
-    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in all_tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in all_tickers], batch_size=3, delay=1.2)
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in all_tickers], batch_size=1, delay=1.0)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in all_tickers], batch_size=1, delay=1.0)
 
     candidates = []
     for ticker, quote, fund in zip(all_tickers, quote_results, fund_results):
@@ -1130,13 +1113,15 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
 
-    # Enrich all candidates with full data pipeline
+    # Enrich top candidates with full data pipeline
     top = candidates[:max(top_n + 2, 8)]
     top = await _enrich_candidates(top, earnings_lookup)
     top.sort(key=lambda x: x["score"], reverse=True)
 
+    full_list = top + candidates[len(top):]
     _longterm_cache["ts"] = time.time()
-    _longterm_cache["data"] = top + candidates[len(top):]
+    _longterm_cache["data"] = full_list
+    set_cached("screener:longterm", full_list, ttl=86400)
     return top[:top_n]
 
 
@@ -1843,16 +1828,20 @@ UNKNOWNS_MODEL: Dict[str, str] = {t: m for t, m in HIDDEN_GEMS_UNIVERSE}
 
 
 async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = None) -> List[Dict]:
-    now = time.time()
-    if _unknowns_cache["ts"] and (now - _unknowns_cache["ts"]) < _FUND_CACHE_TTL and _unknowns_cache["data"]:
-        return _unknowns_cache["data"][:top_n]
+    from services.cache_service import get_cached, set_cached
+    _ck = "screener:hidden_gems"
+    cached = get_cached(_ck)
+    if cached is not None:
+        _unknowns_cache["ts"] = time.time()
+        _unknowns_cache["data"] = cached
+        return cached[:top_n]
 
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
     tickers = [t for t, _ in UNKNOWNS_UNIVERSE]
-    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=1.2)
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=1, delay=1.0)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=1, delay=1.0)
 
     candidates = []
     for ticker, quote, fund in zip(tickers, quote_results, fund_results):
@@ -1900,8 +1889,10 @@ async def screen_unknowns_candidates(top_n: int = 5, earnings_lookup: Dict = Non
     top = await _enrich_candidates(top, earnings_lookup)
     top.sort(key=lambda x: x["score"], reverse=True)
 
+    full_list = top + candidates[len(top):]
     _unknowns_cache["ts"] = time.time()
-    _unknowns_cache["data"] = top + candidates[len(top):]
+    _unknowns_cache["data"] = full_list
+    set_cached("screener:hidden_gems", full_list, ttl=86400)
     return top[:top_n]
 
 
@@ -1983,17 +1974,21 @@ def _score_bargain(fund: Dict, price: float, model: str = "") -> float:
 
 
 async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = None) -> List[Dict]:
-    now = time.time()
-    if _bargain_cache["ts"] and (now - _bargain_cache["ts"]) < _FUND_CACHE_TTL and _bargain_cache["data"]:
-        return _bargain_cache["data"][:top_n]
+    from services.cache_service import get_cached, set_cached
+    _ck = "screener:bargain"
+    cached = get_cached(_ck)
+    if cached is not None:
+        _bargain_cache["ts"] = time.time()
+        _bargain_cache["data"] = cached
+        return cached[:top_n]
 
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
     tickers = [t for t, _ in BARGAIN_UNIVERSE]
 
-    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=5, delay=0.8)
-    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=3, delay=1.2)
+    quote_results = await _batch_gather([yf_svc.get_quote(t) for t in tickers], batch_size=1, delay=1.0)
+    fund_results  = await _batch_gather([finnhub_service.get_fundamentals_mapped(t) for t in tickers], batch_size=1, delay=1.0)
 
     candidates = []
     for ticker, quote, fund in zip(tickers, quote_results, fund_results):
@@ -2049,12 +2044,14 @@ async def screen_bargain_candidates(top_n: int = 10, earnings_lookup: Dict = Non
     candidates.sort(key=lambda x: x["score"], reverse=True)
 
     # Enrich top candidates with analyst consensus + insider signal + earnings date
-    top = candidates[:max(top_n + 4, 18)]
+    top = candidates[:max(top_n + 2, 8)]
     top = await _enrich_candidates(top, earnings_lookup)
     top.sort(key=lambda x: x["score"], reverse=True)
 
+    full_list = top + candidates[len(top):]
     _bargain_cache["ts"] = time.time()
-    _bargain_cache["data"] = top + candidates[len(top):]
+    _bargain_cache["data"] = full_list
+    set_cached("screener:bargain", full_list, ttl=86400)
     return top[:top_n]
 
 
