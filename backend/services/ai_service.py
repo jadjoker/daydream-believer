@@ -864,16 +864,17 @@ async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> 
         stop_pct   = max(0.05, min(0.35, float(p.get("stop_pct")   or 0.12)))
         target_pct = max(0.10, min(1.50, float(p.get("target_pct") or 0.25)))
 
-        if not price:
-            # No live price available — skip rather than show $0.00
-            continue
-        entry_low  = round(price * 0.990, 2)
-        entry_high = round(price * 1.015, 2)
-        stop_loss  = round(entry_low * (1 - stop_pct), 2)
-        target     = round(entry_low * (1 + target_pct), 2)
-        risk       = max(entry_low - stop_loss, 0.01)
-        reward     = max(target - entry_low, 0)
-        rr         = f"1:{reward/risk:.1f}" if risk > 0 else "—"
+        if price:
+            entry_low  = round(price * 0.990, 2)
+            entry_high = round(price * 1.015, 2)
+            stop_loss  = round(entry_low * (1 - stop_pct), 2)
+            target     = round(entry_low * (1 + target_pct), 2)
+            risk       = max(entry_low - stop_loss, 0.01)
+            reward     = max(target - entry_low, 0)
+            rr         = f"1:{reward/risk:.1f}" if risk > 0 else "—"
+        else:
+            entry_low = entry_high = stop_loss = target = None
+            rr = "—"
 
         reg = _COMPANY_REGISTRY[ticker]
         category = p.get("category", reg[1])

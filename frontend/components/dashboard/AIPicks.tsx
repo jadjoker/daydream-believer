@@ -217,7 +217,7 @@ function PickCard({ pick, onSelect, onSimulate }: { pick: any; onSelect: () => v
         </div>
       </div>
       <div className="grid grid-cols-4 gap-0 divide-x divide-zinc-800">
-        <PriceTile label="Entry Zone" value={`${formatPrice(pick.entry_low)} – ${formatPrice(pick.entry_high)}`} className="text-zinc-200" />
+        <PriceTile label="Entry Zone" value={pick.entry_low && pick.entry_high ? `${formatPrice(pick.entry_low)} – ${formatPrice(pick.entry_high)}` : "—"} className="text-zinc-200" />
         <PriceTile label="Stop Loss" value={formatPrice(pick.stop_loss)} className="text-red-400" />
         <PriceTile label="Target" value={formatPrice(pick.target)} className="text-emerald-400" />
         <PriceTile label="Risk/Reward" value={pick.risk_reward || (risk && reward ? `1:${(reward / risk).toFixed(1)}` : "—")} className="text-cyan-400" />
