@@ -876,13 +876,15 @@ def _compute_support_entry(price: float, bars: list) -> tuple:
 
 async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = None) -> List[Dict]:
     """
-    Enrich the top candidates with analyst consensus, insider signal, and
-    technically-derived entry zones (EMA50 / swing low). Called AFTER initial
-    scoring so we only hit Finnhub for the final shortlist (~16-20 tickers).
+    Enrich candidates with the same full data pipeline used in single-ticker analysis:
+    TA signals, ATR-based stops, 52-week range, analyst consensus + target range,
+    insider signal, and earnings date + EPS surprise.
     """
     if not candidates:
         return candidates
     from services import finnhub_service
+    from services.technical_analysis import get_technical_signals
+    from datetime import date as _date
 
     tickers = [c["ticker"] for c in candidates]
 
@@ -899,52 +901,127 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
         [finnhub_service.get_candles(t, period="3mo", interval="1d") for t in tickers],
         batch_size=3, delay=1.2,
     )
+    ta_results = await _batch_gather(
+        [get_technical_signals(t, period="1y", interval="1d") for t in tickers],
+        batch_size=3, delay=0.8,
+    )
+    earnings_results = await _batch_gather(
+        [finnhub_service.get_ticker_earnings_data(t) for t in tickers],
+        batch_size=3, delay=1.0,
+    )
 
-    for c, analyst, insider, bars in zip(candidates, analyst_results, insider_results, candle_results):
-        a = analyst if isinstance(analyst, dict) else {}
-        ins = insider if isinstance(insider, str) else ""
-        bars_list = bars if isinstance(bars, list) else []
+    for c, analyst, insider, bars, ta, earnings in zip(
+        candidates, analyst_results, insider_results, candle_results, ta_results, earnings_results
+    ):
+        a         = analyst  if isinstance(analyst,  dict) else {}
+        ins       = insider  if isinstance(insider,  str)  else ""
+        bars_list = bars     if isinstance(bars,     list) else []
+        ta_data   = ta       if isinstance(ta,       dict) else {}
+        earn_data = earnings if isinstance(earnings, dict) else {}
 
-        # ── Technical entry zone (replaces flat ±3% band) ──────────────────
         price = c.get("price", 0)
+
+        # ── ATR from TA (fallback to 2% of price) ────────────────────────────
+        atr_14 = ta_data.get("atr_14") or (price * 0.02)
+        c["atr_14"] = atr_14
+
+        # ── Support-based entry zone ──────────────────────────────────────────
         if price and bars_list:
             entry_low, entry_high, entry_method = _compute_support_entry(price, bars_list)
             c["entry_low"]    = entry_low
             c["entry_high"]   = entry_high
             c["entry_method"] = entry_method
-            # Stop relative to the new entry (not to current price)
-            c["stop_loss"] = round(entry_low * 0.88, 2)
-            # Recompute R/R with updated levels
-            target_price = c.get("target", price * 1.40)
-            risk   = max(entry_low - c["stop_loss"], 0.01)
-            reward = max(target_price - entry_low, 0)
-            c["rr"] = round(reward / risk, 1)
         else:
+            entry_low = c.get("entry_low", round(price * 0.97, 2))
             c["entry_method"] = "near current price"
 
-        # ── Analyst consensus ───────────────────────────────────────────────
+        # ── ATR-calibrated stop (replaces flat 0.88) ──────────────────────────
+        c["stop_loss"] = round(max(entry_low - 2.0 * atr_14, entry_low * 0.82), 2)
+        target_price = c.get("target", price * 1.40)
+        risk   = max(entry_low - c["stop_loss"], 0.01)
+        reward = max(target_price - entry_low, 0)
+        c["rr"] = round(reward / risk, 1)
+
+        # ── TA signal summary ─────────────────────────────────────────────────
+        ta_parts = []
+        if ta_data:
+            sig = ta_data.get("signal_summary", "")
+            rsi = ta_data.get("rsi_14")
+            adx = ta_data.get("adx")
+            ema50 = ta_data.get("ema_50")
+            sma200 = ta_data.get("sma_200")
+            rel_vol = ta_data.get("rel_volume")
+            bull_sigs = ta_data.get("bull_signals", [])
+            bear_sigs = ta_data.get("bear_signals", [])
+            if sig:
+                ta_parts.append(sig)
+            if rsi is not None:
+                ta_parts.append(f"RSI {rsi:.0f}")
+            if adx is not None:
+                ta_parts.append(f"ADX {adx:.0f}")
+            if ema50 and sma200 and price:
+                cross = "GoldenX" if ema50 > sma200 else "DeathX"
+                pct = (price - sma200) / sma200 * 100
+                ta_parts.append(f"{cross} ({pct:+.1f}% vs SMA200)")
+            if rel_vol and rel_vol > 1.5:
+                ta_parts.append(f"RelVol {rel_vol:.1f}x")
+            if bull_sigs:
+                ta_parts.append("Bull: " + "; ".join(bull_sigs[:2]))
+            if bear_sigs:
+                ta_parts.append("Bear: " + "; ".join(bear_sigs[:2]))
+        c["ta_summary"] = " | ".join(ta_parts) if ta_parts else ""
+
+        # ── 52-week range ─────────────────────────────────────────────────────
+        w52h = c.get("week_52_high")
+        w52l = c.get("week_52_low")
+        range_str = ""
+        if w52h and w52l and w52h > w52l and price:
+            pct_from_high = (w52h - price) / w52h * 100
+            range_pct = (price - w52l) / (w52h - w52l) * 100
+            range_str = (
+                f"52W ${w52l:.2f}–${w52h:.2f} "
+                f"({range_pct:.0f}% of range, {pct_from_high:.1f}% off high)"
+            )
+        c["range_str"] = range_str
+
+        # ── Analyst consensus ─────────────────────────────────────────────────
         analyst_line = ""
-        buy  = a.get("analyst_buy", 0) or 0
+        buy  = a.get("analyst_buy",  0) or 0
         hold = a.get("analyst_hold", 0) or 0
         sell = a.get("analyst_sell", 0) or 0
-        total = buy + hold + sell
-        if total > 0:
+        if (buy + hold + sell) > 0:
             analyst_line = f"Analysts: {buy}B/{hold}H/{sell}S"
-        target = a.get("target_price")
-        if target and price:
-            upside = (target - price) / price * 100
-            analyst_line += f" | Target ${target:.0f} ({upside:+.0f}%)"
+        tgt_mean = a.get("target_price")
+        tgt_low  = a.get("target_low")
+        tgt_high = a.get("target_high")
+        if tgt_mean and price:
+            upside = (tgt_mean - price) / price * 100
+            analyst_line += f" | Target ${tgt_mean:.0f} ({upside:+.0f}%)"
+            if tgt_low and tgt_high:
+                analyst_line += f" range ${tgt_low:.0f}–${tgt_high:.0f}"
 
-        # ── Insider signal ──────────────────────────────────────────────────
+        # ── Insider signal ────────────────────────────────────────────────────
         insider_line = ""
         if ins == "buying":
             insider_line = "Insiders: buying ▲"
         elif ins == "selling":
             insider_line = "Insiders: selling ▼"
 
-        # ── Earnings date ───────────────────────────────────────────────────
+        # ── Earnings context ──────────────────────────────────────────────────
         earnings_line = ""
-        if earnings_lookup:
+        next_date = earn_data.get("next_date")
+        last_surprise = earn_data.get("last_surprise_pct")
+        if next_date:
+            try:
+                nd = _date.fromisoformat(next_date)
+                days_out = (nd - _date.today()).days
+                if days_out >= 0:
+                    earnings_line = f"Earnings: {next_date} ({days_out}d out)"
+                    if last_surprise is not None:
+                        earnings_line += f" | Last surprise: {last_surprise:+.1f}%"
+            except Exception:
+                pass
+        if not earnings_line and earnings_lookup:
             ed = earnings_lookup.get(c["ticker"])
             if ed:
                 earnings_line = f"Earnings: {ed}"
@@ -953,9 +1030,9 @@ async def _enrich_candidates(candidates: List[Dict], earnings_lookup: Dict = Non
         if extras:
             c["fund_summary"] = c.get("fund_summary", "") + " | " + " | ".join(extras)
 
-        c["_analyst"]        = a
-        c["_insider"]        = ins
-        c["_earnings_date"]  = earnings_lookup.get(c["ticker"]) if earnings_lookup else None
+        c["_analyst"]       = a
+        c["_insider"]       = ins
+        c["_earnings_date"] = next_date or (earnings_lookup.get(c["ticker"]) if earnings_lookup else None)
 
     return candidates
 
@@ -982,13 +1059,37 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
         if not price:
             continue
 
-        model = model_map.get(ticker, "")
+        sector = q.get("sector", "")
+        industry = q.get("industry", "")
+
+        # Auto-detect business model from sector/industry if not manually mapped
+        manual_model = model_map.get(ticker, "")
+        if manual_model:
+            model = manual_model
+        else:
+            sl = sector.lower()
+            il = industry.lower()
+            if any(k in sl for k in ["technology", "information technology"]):
+                model = "saas" if any(k in il for k in ["software", "internet", "cloud"]) else "deeptech"
+            elif "financial" in sl or "bank" in sl:
+                model = "fintech" if any(k in il for k in ["payment", "processing", "fintech"]) else "financial"
+            elif any(k in sl for k in ["health", "pharma", "biotech"]):
+                model = "healthcare"
+            elif any(k in sl for k in ["consumer", "retail"]):
+                model = "consumer"
+            elif any(k in sl for k in ["energy", "oil", "gas"]):
+                model = "energy"
+            elif any(k in sl for k in ["industrial", "manufactur"]):
+                model = "industrial"
+            else:
+                model = ""
+
         score = _score_longterm(f, price, model)
 
-        # Short float bonus/penalty: high short interest on a quality stock = potential squeeze upside
+        # Short float bonus/penalty
         short_float = q.get("short_float")
         if short_float is not None:
-            if short_float > 0.20:   score -= 1.0   # heavily shorted = risky, penalise slightly
+            if short_float > 0.20:   score -= 1.0
             elif short_float > 0.10: score -= 0.5
 
         entry_low  = round(price * 0.97, 2)
@@ -998,17 +1099,22 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
         rr = round((target - price) / max(price - stop_loss, 0.01), 1)
 
         parts = []
-        if f.get("pe_ratio"):                    parts.append(f"P/E {f['pe_ratio']:.1f}")
+        if f.get("pe_ratio"):                     parts.append(f"P/E {f['pe_ratio']:.1f}")
         if f.get("forward_pe"):                   parts.append(f"FwdP/E {f['forward_pe']:.1f}")
         if f.get("peg_ratio"):                    parts.append(f"PEG {f['peg_ratio']:.2f}")
+        if f.get("ps_ratio"):                     parts.append(f"P/S {f['ps_ratio']:.1f}")
+        if f.get("pb_ratio"):                     parts.append(f"P/B {f['pb_ratio']:.1f}")
         if f.get("revenue_growth") is not None:   parts.append(f"RevGrowth {f['revenue_growth']*100:.1f}%")
         if f.get("earnings_growth") is not None:  parts.append(f"EPSGrowth {f['earnings_growth']*100:.1f}%")
-        if f.get("profit_margin") is not None:    parts.append(f"Margin {f['profit_margin']*100:.1f}%")
+        if f.get("gross_margins") is not None:    parts.append(f"GrossMargin {f['gross_margins']*100:.1f}%")
+        if f.get("operating_margin") is not None: parts.append(f"OpMargin {f['operating_margin']*100:.1f}%")
+        if f.get("profit_margin") is not None:    parts.append(f"NetMargin {f['profit_margin']*100:.1f}%")
         if f.get("roe") is not None:              parts.append(f"ROE {f['roe']*100:.1f}%")
         if f.get("debt_to_equity") is not None:   parts.append(f"D/E {f['debt_to_equity']:.0f}")
         if f.get("dividend_yield"):               parts.append(f"Div {f['dividend_yield']*100:.1f}%")
         if short_float is not None and short_float > 0.05:
             parts.append(f"Short {short_float*100:.0f}%")
+        if f.get("short_ratio"):                  parts.append(f"ShortRatio {f['short_ratio']:.1f}d")
         if f.get("free_cashflow"):
             fcf = f["free_cashflow"]
             parts.append(f"FCF {'${:.1f}B'.format(fcf/1e9) if abs(fcf) >= 1e9 else '${:.0f}M'.format(fcf/1e6)}")
@@ -1017,8 +1123,11 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
             "ticker": ticker,
             "name": q.get("name", ticker),
             "price": price,
-            "sector": q.get("sector", ""),
+            "sector": sector,
+            "industry": industry,
             "business_model": model,
+            "week_52_high": q.get("week_52_high"),
+            "week_52_low": q.get("week_52_low"),
             "fund_summary": " | ".join(parts) if parts else "Limited data",
             "entry_low": entry_low,
             "entry_high": entry_high,
@@ -1030,8 +1139,8 @@ async def screen_longterm_candidates(top_n: int = 8, earnings_lookup: Dict = Non
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
 
-    # Enrich top candidates with analyst consensus + insider signal + earnings date
-    top = candidates[:max(top_n + 4, 20)]
+    # Enrich all candidates with full data pipeline
+    top = candidates[:max(top_n + 2, 8)]
     top = await _enrich_candidates(top, earnings_lookup)
     top.sort(key=lambda x: x["score"], reverse=True)
 
@@ -1999,11 +2108,20 @@ def _build_unified_prompt(
             f"${c['entry_low']:.2f}–${c['entry_high']:.2f} ({entry_basis})"
             if c.get("entry_low") else "at/near current price"
         )
-        rows.append(
-            f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}\n"
+        atr = c.get("atr_14")
+        atr_str = f" | ATR ${atr:.2f}" if atr else ""
+        ta_str = c.get("ta_summary", "")
+        range_str = c.get("range_str", "")
+        row = (
+            f"#{i} {c['ticker']} ({c['name']}) [{model_label}] — ${c['price']:.2f} | Sector: {c.get('sector', '')}{atr_str}\n"
             f"   Fundamentals: {c['fund_summary']}\n"
-            f"   Score: {c['score']:.1f} | Entry target: {entry_str}"
+            f"   Entry: {entry_str} | Stop ${c['stop_loss']:.2f} | Target ${c.get('target', 0):.2f} | R/R 1:{c['rr']}"
         )
+        if ta_str:
+            row += f"\n   TA: {ta_str}"
+        if range_str:
+            row += f"\n   {range_str}"
+        rows.append(row)
     candidates_block = "\n".join(rows)
     spy_c = market_overview.get("spy_change_pct", 0)
     vix = market_overview.get("vix") or 20
