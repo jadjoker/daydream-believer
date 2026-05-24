@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { useData } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import { formatPrice } from "@/lib/utils";
 import {
@@ -454,51 +453,110 @@ function PicksPanel({
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
+// Polling interval and max wait before giving up
+const POLL_INTERVAL_MS = 6000;
+const MAX_WAIT_MS = 300_000; // 5 minutes
+
+type Phase = "checking" | "generating" | "ready" | "error";
+
 function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
-  const [fetchKey, setFetchKey] = useState(0);
-  // null = checking, true = has cache, false = no cache (will generate)
-  const [cacheStatus, setCacheStatus] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    api.aiPicksStatus().then((s: any) => {
-      setCacheStatus(!!s.has_picks);
-    }).catch(() => {
-      // If status check fails, still attempt to load
-      setCacheStatus(false);
-    });
-  }, []);
-
-  // Start fetching as soon as we know the cache status (regardless of whether cached)
-  const { data: allData, loading, error, refetch } = useData(
-    () => cacheStatus !== null ? api.aiPicksAll() as Promise<any> : Promise.resolve(null),
-    [fetchKey, cacheStatus],
-    { refreshInterval: 0 }
-  );
-
+  const [phase, setPhase] = useState<Phase>("checking");
+  const [picksData, setPicksData] = useState<any>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loadingSeconds, setLoadingSeconds] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => {
-    if (loading && cacheStatus !== null) {
-      setLoadingSeconds(0);
-      timerRef.current = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setLoadingSeconds(0);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [loading, cacheStatus]);
+  const [runKey, setRunKey] = useState(0);
 
-  const handleRefresh = async () => {
-    try { await api.aiRefresh(); } catch {}
-    setFetchKey((k) => k + 1);
-    refetch();
+  const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startRef = useRef<number>(0);
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
+
+  const loadPicksFromCache = async () => {
+    try {
+      const data = await api.aiPicksAll() as any;
+      setPicksData(data);
+      setPhase("ready");
+    } catch (e: any) {
+      setErrorMsg(e.message || "Failed to load picks");
+      setPhase("error");
+    }
   };
 
-  const isGenerating = loading && cacheStatus === false;
-  const generatingMsg = loadingSeconds > 60
+  const startPolling = () => {
+    startRef.current = Date.now();
+    stopPoll();
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await api.aiPicksStatus() as any;
+        if (s.has_picks) {
+          stopPoll();
+          stopTimer();
+          loadPicksFromCache();
+          return;
+        }
+        // If generation stopped but no picks → it failed
+        if (!s.generating && Date.now() - startRef.current > 60_000) {
+          stopPoll();
+          stopTimer();
+          setErrorMsg("Generation failed — please retry.");
+          setPhase("error");
+        }
+        // Hard timeout
+        if (Date.now() - startRef.current > MAX_WAIT_MS) {
+          stopPoll();
+          stopTimer();
+          setErrorMsg("Timed out waiting for picks — please retry.");
+          setPhase("error");
+        }
+      } catch {}
+    }, POLL_INTERVAL_MS);
+  };
+
+  useEffect(() => {
+    setPhase("checking");
+    setPicksData(null);
+    setErrorMsg(null);
+    setLoadingSeconds(0);
+    stopPoll();
+    stopTimer();
+
+    api.aiPicksStatus().then(async (s: any) => {
+      if (s.has_picks) {
+        loadPicksFromCache();
+      } else {
+        // Start background generation, then poll status
+        setPhase("generating");
+        startRef.current = Date.now();
+        timerRef.current = setInterval(() => setLoadingSeconds((n) => n + 1), 1000);
+        try { await api.aiRefresh(); } catch {}
+        startPolling();
+      }
+    }).catch(() => {
+      // Status check failed — try generating anyway
+      setPhase("generating");
+      startRef.current = Date.now();
+      timerRef.current = setInterval(() => setLoadingSeconds((n) => n + 1), 1000);
+      api.aiRefresh().catch(() => {});
+      startPolling();
+    });
+
+    return () => { stopPoll(); stopTimer(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runKey]);
+
+  const handleRefresh = async () => {
+    stopPoll();
+    stopTimer();
+    try { await api.aiRefresh(); } catch {}
+    setRunKey((k) => k + 1);
+  };
+
+  const generatingMsg = loadingSeconds > 90
     ? "Almost there…"
     : loadingSeconds > 10
-    ? `Generating… ${loadingSeconds}s — this takes ~60–90s`
+    ? `Generating… ${loadingSeconds}s — this takes ~90–120s`
     : "Generating picks…";
 
   return (
@@ -507,14 +565,14 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-zinc-400" />
           <span className="text-sm font-semibold text-zinc-200">AI Picks</span>
-          {allData && !loading && (
+          {phase === "ready" && picksData && (
             <span className="text-[10px] text-zinc-600 border border-zinc-700 rounded px-1.5 py-0.5">
-              {allData.unified?.generated_at ?? ""}
+              {picksData.unified?.generated_at ?? ""}
             </span>
           )}
         </div>
         <div className="flex flex-col items-end gap-0.5">
-          {allData && !loading && (
+          {phase === "ready" && (
             <button
               onClick={handleRefresh}
               className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors"
@@ -523,28 +581,27 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
               Refresh
             </button>
           )}
-          {loading && cacheStatus !== null && (
+          {(phase === "checking" || phase === "generating") && (
             <span className="flex items-center gap-1.5 text-xs text-zinc-500">
               <RefreshCw size={10} className="animate-spin" />
-              {isGenerating ? generatingMsg : `Loading… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}`}
+              {phase === "generating" ? generatingMsg : "Checking…"}
             </span>
           )}
         </div>
       </div>
 
-      {error && renderError(error)}
+      {phase === "error" && errorMsg && renderError(errorMsg)}
 
-      {/* Initial status-check skeleton — only while we haven't started fetching yet */}
-      {cacheStatus === null && (
+      {phase === "checking" && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 space-y-2 animate-pulse">
           {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
         </div>
       )}
 
-      {cacheStatus !== null && (
+      {(phase === "generating" || phase === "ready") && (
         <PicksPanel
-          data={allData?.unified}
-          loading={loading}
+          data={picksData?.unified}
+          loading={phase === "generating"}
           onTickerSelect={onTickerSelect}
           onSimulate={onSimulate}
         />
