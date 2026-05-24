@@ -23,6 +23,11 @@ async def _get(path: str, params: dict = {}) -> Optional[dict]:
 
 async def get_quote(ticker: str) -> Optional[Dict]:
     """Real-time quote via Finnhub — used as primary source when key is set."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_quote:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
     data = await _get("/quote", {"symbol": ticker})
     if not data or not data.get("c"):
         return None
@@ -30,7 +35,7 @@ async def get_quote(ticker: str) -> Optional[Dict]:
     prev  = data.get("pc") or price
     chg   = data.get("d", 0) or 0
     chg_p = data.get("dp", 0) or 0
-    return {
+    result = {
         "ticker": ticker.upper(),
         "name": ticker,
         "price": round(price, 2),
@@ -59,6 +64,8 @@ async def get_quote(ticker: str) -> Optional[Dict]:
         "industry": None,
         "exchange": None,
     }
+    set_cached(_key, result, ttl=600)
+    return result
 
 
 _PERIOD_MAP = {
@@ -221,7 +228,15 @@ async def get_financials(ticker: str, statement: str = "ic", freq: str = "annual
 
 
 async def get_basic_financials(ticker: str) -> Optional[Dict]:
-    return await _get("/stock/metric", {"symbol": ticker, "metric": "all"})
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_basic:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
+    result = await _get("/stock/metric", {"symbol": ticker, "metric": "all"})
+    if result is not None:
+        set_cached(_key, result, ttl=7200)
+    return result
 
 
 async def get_market_news_sentiment(ticker: str) -> Optional[Dict]:

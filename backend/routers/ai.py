@@ -140,10 +140,11 @@ async def _inner_generate_all_picks() -> dict:
     # Phase 1: market snapshot (cached 5 min, only 4 calls)
     market_data = await _build_market_snapshot()
 
-    def _error_result() -> dict:
+    def _error_result(err: str = "") -> dict:
         return {
             "picks": [], "market_summary": "Analysis temporarily unavailable.",
             "bias": "neutral", "generated_at": date_str,
+            **({"debug_error": err[:500]} if err else {}),
         }
 
     # Phase 3: generate unified picks
@@ -156,9 +157,12 @@ async def _inner_generate_all_picks() -> dict:
             mode="unified",
         )
         if not isinstance(unified_result, dict):
-            unified_result = _error_result()
-    except Exception:
-        unified_result = _error_result()
+            unified_result = _error_result("generate_market_picks returned non-dict")
+    except Exception as exc:
+        import traceback
+        err_str = traceback.format_exc()
+        print(f"[AI picks] generation failed: {err_str}")
+        unified_result = _error_result(str(exc))
 
     unified_result["next_trading_day_label"] = "Pick List"
     unified_result["next_trading_day_date"] = None
