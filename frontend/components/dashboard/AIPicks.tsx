@@ -457,26 +457,29 @@ function PicksPanel({
 
 function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
   const [fetchKey, setFetchKey] = useState(0);
-  const [statusChecked, setStatusChecked] = useState(false);
-  const [picksCached, setPicksCached] = useState(false);
+  // null = checking, true = has cache, false = no cache (will generate)
+  const [cacheStatus, setCacheStatus] = useState<boolean | null>(null);
 
   useEffect(() => {
     api.aiPicksStatus().then((s: any) => {
-      setPicksCached(!!s.has_picks);
-      setStatusChecked(true);
-    }).catch(() => setStatusChecked(true));
+      setCacheStatus(!!s.has_picks);
+    }).catch(() => {
+      // If status check fails, still attempt to load
+      setCacheStatus(false);
+    });
   }, []);
 
+  // Start fetching as soon as we know the cache status (regardless of whether cached)
   const { data: allData, loading, error, refetch } = useData(
-    () => picksCached ? api.aiPicksAll() as Promise<any> : Promise.resolve(null),
-    [fetchKey, picksCached],
+    () => cacheStatus !== null ? api.aiPicksAll() as Promise<any> : Promise.resolve(null),
+    [fetchKey, cacheStatus],
     { refreshInterval: 0 }
   );
 
   const [loadingSeconds, setLoadingSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    if (loading) {
+    if (loading && cacheStatus !== null) {
       setLoadingSeconds(0);
       timerRef.current = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
     } else {
@@ -484,13 +487,20 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
       setLoadingSeconds(0);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [loading]);
+  }, [loading, cacheStatus]);
 
   const handleRefresh = async () => {
     try { await api.aiRefresh(); } catch {}
     setFetchKey((k) => k + 1);
     refetch();
   };
+
+  const isGenerating = loading && cacheStatus === false;
+  const generatingMsg = loadingSeconds > 60
+    ? "Almost there…"
+    : loadingSeconds > 10
+    ? `Generating… ${loadingSeconds}s — this takes ~60–90s`
+    : "Generating picks…";
 
   return (
     <div className="space-y-4">
@@ -505,19 +515,19 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
           )}
         </div>
         <div className="flex flex-col items-end gap-0.5">
-          {allData && (
+          {allData && !loading && (
             <button
               onClick={handleRefresh}
-              disabled={loading}
-              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors"
             >
-              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-              {loading ? `Analyzing… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}` : "Refresh"}
+              <RefreshCw size={12} />
+              Refresh
             </button>
           )}
-          {loading && loadingSeconds >= 10 && (
-            <span className="text-[10px] text-zinc-600 text-right">
-              {loadingSeconds < 60 ? "AI warming up — usually 45–120s" : "Almost there…"}
+          {loading && cacheStatus !== null && (
+            <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <RefreshCw size={10} className="animate-spin" />
+              {isGenerating ? generatingMsg : `Loading… ${loadingSeconds > 0 ? `${loadingSeconds}s` : ""}`}
             </span>
           )}
         </div>
@@ -525,29 +535,14 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
 
       {error && renderError(error)}
 
-      {/* Status checking skeleton */}
-      {!statusChecked && (
+      {/* Initial status-check skeleton — only while we haven't started fetching yet */}
+      {cacheStatus === null && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 space-y-2 animate-pulse">
           {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
         </div>
       )}
 
-      {/* No cached picks — show generate button */}
-      {statusChecked && !picksCached && !loading && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col items-center gap-3">
-          <p className="text-sm text-zinc-400">No picks generated yet.</p>
-          <button
-            onClick={() => setPicksCached(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-cyan-600/20 border border-cyan-600/30 text-cyan-400 text-sm rounded-lg hover:bg-cyan-600/30 transition-colors"
-          >
-            <Sparkles size={14} />
-            Generate Picks
-          </button>
-        </div>
-      )}
-
-      {/* Pick list */}
-      {(picksCached || allData) && (
+      {cacheStatus !== null && (
         <PicksPanel
           data={allData?.unified}
           loading={loading}
