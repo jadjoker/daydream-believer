@@ -10,25 +10,12 @@ import {
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Tag,
 } from "lucide-react";
+import { MetricTooltip } from "./MetricTooltip";
 
 interface AIPicksProps {
   onTickerSelect: (ticker: string) => void;
   onSimulate?: (ticker: string) => void;
 }
-
-type HorizonFilter = "all" | "1-3yr" | "3-5yr" | "5-10yr";
-
-const HORIZON_LABELS: Record<string, string> = {
-  "1-3yr":  "1–3 yr",
-  "3-5yr":  "3–5 yr",
-  "5-10yr": "5–10 yr",
-};
-
-const HORIZON_COLORS: Record<string, string> = {
-  "1-3yr":  "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  "3-5yr":  "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  "5-10yr": "bg-amber-500/15 text-amber-300 border-amber-500/30",
-};
 
 const TRADE_TYPE_COLORS: Record<string, string> = {
   growth:     "bg-blue-500/15 text-blue-300 border-blue-500/30",
@@ -53,66 +40,14 @@ export default function AIPicks({ onTickerSelect, onSimulate }: AIPicksProps) {
   return <AllPicks onTickerSelect={onTickerSelect} onSimulate={onSimulate} />;
 }
 
-// ─── Horizon badge ────────────────────────────────────────────────────────────
-
-function HorizonBadge({ horizon }: { horizon?: string }) {
-  if (!horizon) return null;
-  return (
-    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${HORIZON_COLORS[horizon] ?? "bg-zinc-800 text-zinc-400 border-zinc-700"}`}>
-      {HORIZON_LABELS[horizon] ?? horizon}
-    </span>
-  );
-}
-
-// ─── Horizon filter bar ───────────────────────────────────────────────────────
-
-function HorizonFilterBar({
-  value,
-  counts,
-  onChange,
-}: {
-  value: HorizonFilter;
-  counts: Record<HorizonFilter, number>;
-  onChange: (v: HorizonFilter) => void;
-}) {
-  const options: { key: HorizonFilter; label: string }[] = [
-    { key: "all",    label: "All" },
-    { key: "1-3yr",  label: "1–3 yr" },
-    { key: "3-5yr",  label: "3–5 yr" },
-    { key: "5-10yr", label: "5–10 yr" },
-  ];
-  return (
-    <div className="flex items-center gap-1 flex-wrap">
-      {options.map((o) => {
-        const active = value === o.key;
-        const cnt = counts[o.key];
-        return (
-          <button
-            key={o.key}
-            onClick={() => onChange(o.key)}
-            className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
-              active
-                ? "bg-cyan-600/20 border-cyan-600/40 text-cyan-300 font-semibold"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600"
-            }`}
-          >
-            {o.label}
-            {cnt > 0 && (
-              <span className={`text-[10px] ${active ? "text-cyan-500" : "text-zinc-600"}`}>{cnt}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ─── Price tile ───────────────────────────────────────────────────────────────
 
 function PriceTile({ label, value, className }: { label: string; value: string; className?: string }) {
   return (
     <div className="px-3 py-2.5 text-center">
-      <div className="text-[10px] text-zinc-600 mb-0.5 uppercase tracking-wider">{label}</div>
+      <div className="flex items-center justify-center gap-0.5 text-[10px] text-zinc-600 mb-0.5 uppercase tracking-wider">
+        {label}<MetricTooltip term={label} />
+      </div>
       <div className={`text-xs font-semibold tabular-nums ${className}`}>{value}</div>
     </div>
   );
@@ -256,15 +191,15 @@ function PickCard({ pick, onSelect, onSimulate }: { pick: any; onSelect: () => v
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xl font-bold text-cyan-400">#{pick.rank}</span>
           <button onClick={onSelect} className="font-bold text-lg text-zinc-100 hover:text-cyan-400 transition-colors">{pick.ticker}</button>
-          {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
           {pick.trade_type && (
             <span className={`text-[10px] px-2 py-0.5 rounded border ${tradeTypeClass}`}>{pick.trade_type}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
+          <div className={`flex items-center text-sm font-bold tabular-nums ${confidenceColor}`}>
             {pick.confidence}/10
             <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
+            <MetricTooltip term="Confidence" />
           </div>
           <button
             onClick={() => setCalcOpen((o) => !o)}
@@ -322,7 +257,6 @@ function TickerAnalysisCard({ analysis, onSelect, onSimulate }: { analysis: any;
   const recConf = REC_CONFIG[rec] ?? REC_CONFIG.hold;
   const confidenceColor =
     analysis.confidence >= 8 ? "text-emerald-400" : analysis.confidence >= 6 ? "text-yellow-400" : "text-red-400";
-  const hz = analysis.hold_horizon;
 
   return (
     <div className={`rounded-xl border overflow-hidden ${recConf.bg.replace("border-", "border-")}`}>
@@ -332,12 +266,12 @@ function TickerAnalysisCard({ analysis, onSelect, onSimulate }: { analysis: any;
           <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${recConf.bg} ${recConf.cls}`}>
             {recConf.icon} {recConf.label}
           </span>
-          {hz && <HorizonBadge horizon={hz} />}
         </div>
         <div className="flex items-center gap-2">
-          <div className={`text-sm font-bold tabular-nums ${confidenceColor}`}>
+          <div className={`flex items-center text-sm font-bold tabular-nums ${confidenceColor}`}>
             {analysis.confidence}/10
             <span className="text-xs font-normal text-zinc-600 ml-1">confidence</span>
+            <MetricTooltip term="Confidence" />
           </div>
           <button
             onClick={() => setCalcOpen((o) => !o)}
@@ -365,9 +299,7 @@ function TickerAnalysisCard({ analysis, onSelect, onSimulate }: { analysis: any;
       </div>
       <div className="px-4 pt-3 pb-2 bg-zinc-900/40">
         <p className="text-sm text-zinc-400 leading-relaxed">{analysis.thesis}</p>
-        <p className="text-[10px] text-zinc-600 italic mt-2">
-          {hz ? `Long-term analysis (${HORIZON_LABELS[hz] ?? hz} horizon) · not financial advice` : "Long-term analysis · not financial advice"}
-        </p>
+        <p className="text-[10px] text-zinc-600 italic mt-2">Long-term analysis · not financial advice</p>
       </div>
       {(analysis.catalyst || analysis.key_risk) && (
         <div className="px-4 pb-3 bg-zinc-900/40 space-y-1">
@@ -441,7 +373,6 @@ function PicksPanel({
   const [page, setPage] = useState(0);
   const [page1Picks, setPage1Picks] = useState<any[]>([]);
   const [loadingPage1, setLoadingPage1] = useState(false);
-  const [horizonFilter, setHorizonFilter] = useState<HorizonFilter>("all");
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [override, setOverride] = useState<any>(null);
@@ -455,23 +386,11 @@ function PicksPanel({
   useEffect(() => {
     setPage(0);
     setPage1Picks([]);
-    setHorizonFilter("all");
     setExpandedPick(null);
   }, [data]);
 
   const currentPagePicks = page === 0 ? page0Picks : page1Picks;
-
-  // Count horizons across all loaded picks
   const allKnownPicks = [...page0Picks, ...page1Picks];
-  const horizonCounts: Record<HorizonFilter, number> = { all: allKnownPicks.length, "1-3yr": 0, "3-5yr": 0, "5-10yr": 0 };
-  for (const p of allKnownPicks) {
-    const h = p.hold_horizon as HorizonFilter;
-    if (h && h in horizonCounts) horizonCounts[h]++;
-  }
-
-  const filteredPicks = horizonFilter === "all"
-    ? currentPagePicks
-    : currentPagePicks.filter((p) => p.hold_horizon === horizonFilter);
 
   const handleNextPage = async () => {
     if (page === 1) return;
@@ -517,9 +436,6 @@ function PicksPanel({
             }`}>{modeData.bias}</span>
           )}
         </div>
-        {allKnownPicks.length > 0 && (
-          <HorizonFilterBar value={horizonFilter} counts={horizonCounts} onChange={setHorizonFilter} />
-        )}
       </div>
 
       {isLoading && (
@@ -548,13 +464,9 @@ function PicksPanel({
             </div>
           )}
 
-          {filteredPicks.length === 0 && page0Picks.length > 0 && (
-            <p className="text-xs text-zinc-600 italic text-center py-2">No picks for this horizon on page {page + 1}.</p>
-          )}
-
-          {filteredPicks.length > 0 && (
+          {currentPagePicks.length > 0 && (
             <div className="space-y-1.5">
-              {filteredPicks.map((pick: any) => {
+              {currentPagePicks.map((pick: any) => {
                 const key = `${mode}-${pick.ticker}-${pick.rank}`;
                 const isExpanded = expandedPick === key;
                 return (
@@ -568,13 +480,12 @@ function PicksPanel({
                         >
                           {pick.ticker}
                         </button>
-                        {pick.hold_horizon && <HorizonBadge horizon={pick.hold_horizon} />}
                         <span className="text-xs text-zinc-500 truncate hidden md:block">{pick.thesis?.slice(0, 70)}…</span>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className={`text-xs font-bold tabular-nums ${
+                        <span className={`flex items-center text-xs font-bold tabular-nums ${
                           pick.confidence >= 8 ? "text-emerald-400" : pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
-                        }`}>{pick.confidence}/10</span>
+                        }`}>{pick.confidence}/10<MetricTooltip term="Confidence" /></span>
                         <button
                           onClick={() => {
                             const expanding = !isExpanded;
@@ -742,7 +653,6 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
             >
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-zinc-300">{tickerAnalysis.ticker} — Analysis</span>
-                {tickerAnalysis.unified?.hold_horizon && <HorizonBadge horizon={tickerAnalysis.unified.hold_horizon} />}
               </div>
               <span className="text-xs text-zinc-500 flex items-center gap-1">
                 {analysisOpen ? "Collapse" : "Expand"}

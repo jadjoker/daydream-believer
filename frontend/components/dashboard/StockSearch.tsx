@@ -8,6 +8,7 @@ import {
   SendHorizonal, Bot, User, Loader2, ChevronDown, ChevronUp,
   Target, ShieldAlert, ArrowUpRight, RotateCcw,
 } from "lucide-react";
+import { MetricTooltip } from "./MetricTooltip";
 
 interface StockSearchProps {
   onTickerSelect: (ticker: string) => void;
@@ -371,7 +372,7 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
                     : "—" },
               ].map(s => (
                 <div key={s.label} className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
-                  <div className="text-[10px] text-zinc-500 leading-none">{s.label}</div>
+                  <div className="flex items-center gap-0.5 text-[10px] text-zinc-500 leading-none">{s.label}<MetricTooltip term={s.label} /></div>
                   <div className="text-xs font-semibold text-zinc-200 tabular-nums truncate mt-1">{s.value}</div>
                 </div>
               ))}
@@ -413,9 +414,9 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
               <Sparkles size={12} className="text-cyan-400 shrink-0" />
               <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
                 <RecBadge rec={analysis.unified.recommendation} />
-                <span className="text-xs text-zinc-400">{analysis.unified.hold_horizon}</span>
-                <span className="text-zinc-700 text-xs">·</span>
-                <span className="text-xs text-zinc-500">{analysis.unified.confidence}/10</span>
+                <span className="flex items-center text-xs text-zinc-500">
+                  {analysis.unified.confidence}/10<MetricTooltip term="Confidence" />
+                </span>
               </div>
               {showFullAnalysis
                 ? <ChevronUp size={14} className="text-zinc-600 shrink-0" />
@@ -444,7 +445,7 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
                 ].map(item => (
                   <div key={item.label} className="bg-zinc-800/40 border border-zinc-700/30 rounded-lg p-3">
                     <div className="flex items-center gap-1 text-[10px] text-zinc-500 mb-1.5">
-                      {item.icon}{item.label}
+                      {item.icon}{item.label}<MetricTooltip term={item.label} />
                     </div>
                     <div className={`text-xs font-semibold tabular-nums ${item.cls}`}>{item.value}</div>
                   </div>

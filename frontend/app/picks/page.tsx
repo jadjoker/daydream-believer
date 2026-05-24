@@ -141,7 +141,6 @@ function PicksView({ onLogout }: { onLogout: () => void }) {
           <Link href="/" className="text-base font-bold text-cyan-400 hover:text-cyan-300 transition-colors">
             daydream
           </Link>
-          <span className="text-base font-light text-zinc-400 hidden sm:inline">believer</span>
           <span className="text-zinc-700 hidden sm:inline">/</span>
           <span className="text-sm text-zinc-300">AI Picks</span>
 

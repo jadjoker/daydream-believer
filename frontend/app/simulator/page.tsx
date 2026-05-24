@@ -27,7 +27,6 @@ export default function SimulatorPage() {
             <ArrowLeft size={12} /> Back
           </Link>
           <span className="text-base font-bold text-cyan-400">daydream</span>
-          <span className="text-base font-light text-zinc-400 hidden sm:inline">believer</span>
           <span className="hidden sm:flex items-center gap-1 text-xs text-zinc-600 border-l border-zinc-800 pl-3 ml-0.5">
             <TrendingUp size={10} />
             Paper Trader
