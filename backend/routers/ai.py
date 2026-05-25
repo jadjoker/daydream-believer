@@ -20,6 +20,7 @@ _PICKS_TTL    = None  # picks never expire — manual refresh only
 
 # Prevent duplicate concurrent generation
 _picks_lock = asyncio.Lock()
+_swap_lock = asyncio.Lock()   # serialises cache read-modify-write in replace_pick
 _is_generating: bool = False
 _last_refresh_ts: float = 0.0
 _REFRESH_COOLDOWN = 60.0  # seconds between manual refreshes
@@ -379,12 +380,17 @@ async def replace_pick(body: _ReplacePickBody):
     if body.category not in ("long_term", "bargain", "hidden_gem"):
         raise HTTPException(400, "category must be long_term, bargain, or hidden_gem")
 
-    cached = get_cached("ai_picks_all")
-    if not cached:
+    # Fast-path: reject immediately if a full refresh is already running
+    if _picks_lock.locked():
+        raise HTTPException(409, "Full refresh in progress — please wait and try again")
+
+    # Read cache now to build the exclude list before the expensive Claude call
+    cached_pre = get_cached("ai_picks_all")
+    if not cached_pre:
         raise HTTPException(404, "No picks cached — do a full refresh first")
 
-    current_picks = cached.get("unified", {}).get("picks", [])
-    all_current = [p["ticker"] for p in current_picks]
+    current_picks_pre = cached_pre.get("unified", {}).get("picks", [])
+    all_current = [p["ticker"] for p in current_picks_pre]
     # Exclude everything currently shown so the replacement is always a fresh name
     exclude = list(set(body.exclude_tickers + all_current))
 
@@ -392,6 +398,7 @@ async def replace_pick(body: _ReplacePickBody):
     date_str = now.strftime("%Y-%m-%d %H:%M ET")
     market_data = await _build_market_snapshot()
 
+    # Claude call happens outside the lock — it's safe to run concurrently
     try:
         new_pick = await ai_service.generate_replacement_pick(
             body.category, exclude, market_data, date_str
@@ -405,20 +412,34 @@ async def replace_pick(body: _ReplacePickBody):
     if not new_pick:
         raise HTTPException(500, "Could not generate a replacement pick — try again")
 
-    # Preserve the replaced pick's rank
-    old_rank = next(
-        (p["rank"] for p in current_picks if p["ticker"] == body.ticker_to_replace),
-        len(current_picks),
-    )
-    new_pick["rank"] = old_rank
+    # Serialise the cache read-modify-write so concurrent swaps don't clobber each other
+    async with _swap_lock:
+        # Re-check: a full refresh may have started (or completed) during the Claude call
+        if _picks_lock.locked():
+            raise HTTPException(409, "Full refresh started while swap was running — please wait and try again")
 
-    # Atomic cache update — swap old pick for new one
-    new_picks = [
-        new_pick if p["ticker"] == body.ticker_to_replace else p
-        for p in current_picks
-    ]
-    cached["unified"]["picks"] = new_picks
-    set_cached("ai_picks_all", cached, ttl=None)
+        cached = get_cached("ai_picks_all")
+        if not cached:
+            raise HTTPException(409, "Picks were cleared by a full refresh — please wait for new picks to generate")
+
+        current_picks = cached.get("unified", {}).get("picks", [])
+
+        # If a completed refresh already removed this ticker, the swap is stale — reject cleanly
+        if not any(p["ticker"] == body.ticker_to_replace for p in current_picks):
+            raise HTTPException(409, "Pick no longer exists (replaced or refreshed) — refresh to see current picks")
+
+        old_rank = next(
+            (p["rank"] for p in current_picks if p["ticker"] == body.ticker_to_replace),
+            len(current_picks),
+        )
+        new_pick["rank"] = old_rank
+
+        new_picks = [
+            new_pick if p["ticker"] == body.ticker_to_replace else p
+            for p in current_picks
+        ]
+        cached["unified"]["picks"] = new_picks
+        set_cached("ai_picks_all", cached, ttl=None)
 
     return {"pick": new_pick, "replaced_ticker": body.ticker_to_replace}
 

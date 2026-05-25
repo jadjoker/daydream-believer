@@ -814,7 +814,7 @@ async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> 
 
     prompt = _build_quick_picks_prompt(market_overview, date_str)
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=4000))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=8000))
 
     try:
         parsed = _parse_response(raw)
