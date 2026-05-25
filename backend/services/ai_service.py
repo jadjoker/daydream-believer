@@ -706,14 +706,14 @@ _COMPANY_REGISTRY: Dict[str, tuple] = {
     "FTRE":  ("Fortrea",              "bargain",    "CRO spun from LabCorp, clinical trial services, growing backlog"),
     "MDXG":  ("MiMedx",              "bargain",    "regenerative medicine amniotic tissue, improving gross margins"),
     "LBRT":  ("Liberty Energy",       "bargain",    "oilfield services, hydraulic fracturing, FCF-positive operations"),
-    "PARA":  ("Paramount Global",     "bargain",    "Skydance merger complete, streaming + Paramount+ IP library"),
+    "AMCX":  ("AMC Networks",          "bargain",    "cable TV network portfolio (AMC, IFC, Sundance), deep-value FCF yield 15%+, content IP library"),
     "KSS":   ("Kohl's",               "bargain",    "discount department retailer, strong FCF, high dividend yield"),
-    "WBA":   ("Walgreens Boots",      "bargain",    "pharmacy network turnaround, store closures streamlining ops"),
+    "AAL":   ("American Airlines",    "bargain",    "airline turnaround, capacity discipline + debt reduction, recovering domestic + international load factors"),
     "TASK":  ("TaskUs",               "bargain",    "AI-enabled BPO, growing enterprise digital experience contracts"),
     "CTLP":  ("Cantaloupe",           "bargain",    "unattended retail IoT + SaaS, growing subscription revenue mix"),
     # ── Hidden Gems ───────────────────────────────────────────────────────────
     "FROG":  ("JFrog",                "hidden_gem", "universal DevOps artifact management SaaS, security + MLOps"),
-    "CFLT":  ("Confluent",            "hidden_gem", "real-time data streaming platform (Kafka cloud), developer-led"),
+    "GTLB":  ("GitLab",               "hidden_gem", "end-to-end DevSecOps platform, AI code review, 30%+ ARR growth, path to GAAP profitability"),
     "WK":    ("Workiva",              "hidden_gem", "financial reporting + ESG compliance SaaS, sticky enterprise"),
     "ACMR":  ("ACM Research",         "hidden_gem", "advanced wafer cleaning equipment, single-wafer processing leader"),
     "SMTC":  ("Semtech",              "hidden_gem", "LoRa IoT connectivity chips + data center optical transceivers"),
@@ -726,7 +726,7 @@ _COMPANY_REGISTRY: Dict[str, tuple] = {
     "LMAT":  ("LeMaitre Vascular",    "hidden_gem", "specialty vascular surgical devices, consistent compounder"),
     "AAON":  ("AAON Inc",             "hidden_gem", "HVAC manufacturer, 20%+ operating margins, founder-led culture"),
     "CRVL":  ("CorVel Corp",          "hidden_gem", "risk management + workers comp SaaS, 40-year track record"),
-    "JAMF":  ("JAMF Holding",         "hidden_gem", "Apple device management SaaS, education + enterprise"),
+    "DOCS":  ("Doximity",             "hidden_gem", "physician digital platform, 80%+ gross margin, 80% of US doctors, healthcare SaaS with moat"),
     "WEAV":  ("Weave Communications", "hidden_gem", "patient + SMB communications SaaS, vertical CRM focus"),
 }
 
@@ -2210,9 +2210,9 @@ BARGAIN_UNIVERSE: List[tuple] = [
     # ── Industrial & energy ──────────────────────────────────────────────────
     ("LBRT",  "industrial"), # Liberty Energy — oilfield services, FCF-positive
     # ── Consumer & retail ────────────────────────────────────────────────────
-    ("PARA",  "consumer"),   # Paramount — Skydance deal, streaming + IP library
+    ("AMCX",  "consumer"),   # AMC Networks — cable TV deep value, FCF 15%+ yield
     ("KSS",   "consumer"),   # Kohl's — deep discount retailer, strong FCF
-    ("WBA",   "consumer"),   # Walgreens — turnaround, pharmacy network moat
+    ("AAL",   "consumer"),   # American Airlines — airline turnaround, debt reduction
     # ── Business services ────────────────────────────────────────────────────
     ("TASK",  "platform"),   # TaskUs — AI-enabled BPO, growing enterprise contracts
     ("CTLP",  "fintech"),    # Cantaloupe — unattended retail IoT, growing SaaS rev
@@ -2229,7 +2229,7 @@ BARGAIN_MODEL: Dict[str, str] = {t: m for t, m in BARGAIN_UNIVERSE}
 HIDDEN_GEMS_UNIVERSE: List[tuple] = [
     # ── DevOps & data infrastructure ────────────────────────────────────────
     ("FROG",  "saas"),        # JFrog — universal artifact management SaaS
-    ("CFLT",  "saas"),        # Confluent — real-time data streaming platform
+    ("GTLB",  "saas"),        # GitLab — end-to-end DevSecOps platform, AI code review
     ("WK",    "saas"),        # Workiva — financial reporting & compliance SaaS
     # ── Semiconductor & hardware ─────────────────────────────────────────────
     ("ACMR",  "deeptech"),    # ACM Research — advanced wafer cleaning equipment
@@ -2247,7 +2247,7 @@ HIDDEN_GEMS_UNIVERSE: List[tuple] = [
     ("AAON",  "industrial"),  # AAON Inc — HVAC manufacturer, 20%+ margins
     ("CRVL",  "financial"),   # CorVel Corp — risk management, 40-yr track record
     # ── SMB & mid-market SaaS ────────────────────────────────────────────────
-    ("JAMF",  "saas"),        # JAMF Holding — Apple device management platform
+    ("DOCS",  "saas"),        # Doximity — physician digital platform, 80%+ gross margin
     ("WEAV",  "saas"),        # Weave Communications — patient/SMB comms SaaS
 ]
 
