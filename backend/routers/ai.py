@@ -348,6 +348,66 @@ async def clear_mode_cache(mode: str):
     return {"cleared": mode}
 
 
+class _ReplacePickBody(BaseModel):
+    ticker_to_replace: str
+    category: str
+    exclude_tickers: list[str] = []
+
+
+@router.post("/replace-pick")
+async def replace_pick(body: _ReplacePickBody):
+    """
+    Replace a single pick with a fresh one from the same category.
+    ~350 tokens total — ~86% cheaper than a full refresh.
+    Requires picks to already be cached; call /ai/picks-all first if cache is empty.
+    """
+    if body.category not in ("long_term", "bargain", "hidden_gem"):
+        raise HTTPException(400, "category must be long_term, bargain, or hidden_gem")
+
+    cached = get_cached("ai_picks_all")
+    if not cached:
+        raise HTTPException(404, "No picks cached — do a full refresh first")
+
+    current_picks = cached.get("unified", {}).get("picks", [])
+    all_current = [p["ticker"] for p in current_picks]
+    # Exclude everything currently shown so the replacement is always a fresh name
+    exclude = list(set(body.exclude_tickers + all_current))
+
+    now = datetime.now(pytz.timezone("US/Eastern"))
+    date_str = now.strftime("%Y-%m-%d %H:%M ET")
+    market_data = await _build_market_snapshot()
+
+    try:
+        new_pick = await ai_service.generate_replacement_pick(
+            body.category, exclude, market_data, date_str
+        )
+    except Exception as e:
+        msg = str(e)
+        if "credit balance is too low" in msg or "billing" in msg.lower():
+            raise HTTPException(402, "Ya'll broke as hell")
+        raise HTTPException(500, f"Replacement generation failed: {e}")
+
+    if not new_pick:
+        raise HTTPException(500, "Could not generate a replacement pick — try again")
+
+    # Preserve the replaced pick's rank
+    old_rank = next(
+        (p["rank"] for p in current_picks if p["ticker"] == body.ticker_to_replace),
+        len(current_picks),
+    )
+    new_pick["rank"] = old_rank
+
+    # Atomic cache update — swap old pick for new one
+    new_picks = [
+        new_pick if p["ticker"] == body.ticker_to_replace else p
+        for p in current_picks
+    ]
+    cached["unified"]["picks"] = new_picks
+    set_cached("ai_picks_all", cached, ttl=None)
+
+    return {"pick": new_pick, "replaced_ticker": body.ticker_to_replace}
+
+
 @router.get("/analyze-all/{ticker}")
 async def analyze_ticker_all(ticker: str, refresh: bool = False):
     """Single-prompt analysis. Cached 24h per ticker; pass ?refresh=true to force regeneration."""

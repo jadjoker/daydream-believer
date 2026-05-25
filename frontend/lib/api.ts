@@ -74,6 +74,12 @@ export const api = {
   aiPicksStatus: () => apiFetch("/ai/picks-status"),
   aiRefresh: () => apiFetch("/ai/refresh", { method: "POST" }),
   aiClearMode: (mode: string) => apiFetch(`/ai/clear-mode/${mode}`, { method: "POST" }),
+  aiReplacePick: (tickerToReplace: string, category: string, excludeTickers: string[]) =>
+    apiFetch("/ai/replace-pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker_to_replace: tickerToReplace, category, exclude_tickers: excludeTickers }),
+    }),
   analyzeTicker: (ticker: string, mode: "unified" | "long" | "discovery" = "unified") =>
     apiFetch(`/ai/analyze/${encodeURIComponent(ticker)}?mode=${mode}`),
   analyzeTickerAll: (ticker: string, refresh = false) =>

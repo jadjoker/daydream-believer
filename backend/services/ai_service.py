@@ -648,14 +648,23 @@ def _parse_response(raw: str) -> Dict:
 # ─── Quick picks: Claude selects from registry + Finnhub live prices ──────────
 # (ticker, full_name, category, one-line description)
 _COMPANY_REGISTRY: Dict[str, tuple] = {
-    # ── Long-term ──────────────────────────────────────────────────────────────
-    "AAPL":  ("Apple",                "long_term",  "iPhone/Mac ecosystem + services, 94% gross margin on services"),
-    "MSFT":  ("Microsoft",            "long_term",  "Azure cloud #2 globally, Copilot AI across all products"),
-    "GOOGL": ("Alphabet",             "long_term",  "Search + YouTube + Google Cloud, Gemini AI integration"),
-    "NVDA":  ("Nvidia",               "long_term",  "AI GPU monopoly, H100/Blackwell, data center + robotics"),
-    "META":  ("Meta Platforms",       "long_term",  "Facebook/Instagram/WhatsApp + Reels growth, AI ad targeting"),
-    "AMZN":  ("Amazon",               "long_term",  "AWS cloud leader + e-commerce + ads, expanding operating margins"),
-    "TSLA":  ("Tesla",                "long_term",  "EV + energy storage + Full Self-Driving, robotaxi optionality"),
+    # ── Blue-chip (excluded from picks pool — too consensus/obvious) ─────────────
+    "AAPL":  ("Apple",                "blue_chip",  "iPhone/Mac ecosystem + services, 94% gross margin on services"),
+    "MSFT":  ("Microsoft",            "blue_chip",  "Azure cloud #2 globally, Copilot AI across all products"),
+    "GOOGL": ("Alphabet",             "blue_chip",  "Search + YouTube + Google Cloud, Gemini AI integration"),
+    "NVDA":  ("Nvidia",               "blue_chip",  "AI GPU monopoly, H100/Blackwell, data center + robotics"),
+    "META":  ("Meta Platforms",       "blue_chip",  "Facebook/Instagram/WhatsApp + Reels growth, AI ad targeting"),
+    "AMZN":  ("Amazon",               "blue_chip",  "AWS cloud leader + e-commerce + ads, expanding operating margins"),
+    "TSLA":  ("Tesla",                "blue_chip",  "EV + energy storage + Full Self-Driving, robotaxi optionality"),
+    "V":     ("Visa",                 "blue_chip",  "global payment network, 80%+ operating margin, pricing power"),
+    "MA":    ("Mastercard",           "blue_chip",  "global payment network, value-added services, international mix"),
+    "JPM":   ("JPMorgan Chase",       "blue_chip",  "largest US bank, AI adoption leader, consistent capital return"),
+    "LLY":   ("Eli Lilly",            "blue_chip",  "GLP-1 drugs Mounjaro/Zepbound, massive obesity market TAM"),
+    "UNH":   ("UnitedHealth Group",   "blue_chip",  "largest US managed care + Optum health services platform"),
+    "WMT":   ("Walmart",              "blue_chip",  "retail dominance + e-commerce acceleration, ad business scaling"),
+    "XOM":   ("ExxonMobil",           "blue_chip",  "oil/gas major, Pioneer acquisition synergies, strong FCF dividend"),
+    "CVX":   ("Chevron",              "blue_chip",  "oil/gas major, Hess acquisition, consistent buyback program"),
+    # ── Long-term (quality compounders, non-consensus) ─────────────────────────
     "AMD":   ("AMD",                  "long_term",  "MI300x data center GPUs + EPYC CPUs, market share gains vs Intel"),
     "CRM":   ("Salesforce",           "long_term",  "CRM SaaS leader, Agentforce AI agents, >$34B ARR"),
     "NOW":   ("ServiceNow",           "long_term",  "enterprise workflow SaaS, AI platform upsell, >99% renewal rates"),
@@ -666,20 +675,19 @@ _COMPANY_REGISTRY: Dict[str, tuple] = {
     "NFLX":  ("Netflix",              "long_term",  "streaming leader, ad tier scaling, live sports + games"),
     "UBER":  ("Uber",                 "long_term",  "rides + delivery global marketplace, improving EBITDA margins"),
     "COIN":  ("Coinbase",             "long_term",  "leading US crypto exchange, base L2, institutional custody"),
-    "V":     ("Visa",                 "long_term",  "global payment network, 80%+ operating margin, pricing power"),
-    "MA":    ("Mastercard",           "long_term",  "global payment network, value-added services, international mix"),
     "QCOM":  ("Qualcomm",             "long_term",  "5G modem leader, Snapdragon AI edge chips, automotive design wins"),
     "AI":    ("C3.ai",                "long_term",  "enterprise AI software platform, pilot-to-production momentum"),
-    "LLY":   ("Eli Lilly",            "long_term",  "GLP-1 drugs Mounjaro/Zepbound, massive obesity market TAM"),
     "ABBV":  ("AbbVie",               "long_term",  "Skyrizi/Rinvoq offsetting Humira biosimilar pressure"),
-    "UNH":   ("UnitedHealth Group",   "long_term",  "largest US managed care + Optum health services platform"),
-    "JPM":   ("JPMorgan Chase",       "long_term",  "largest US bank, AI adoption leader, consistent capital return"),
     "GS":    ("Goldman Sachs",        "long_term",  "investment banking rebound cycle, asset/wealth management growing"),
-    "WMT":   ("Walmart",              "long_term",  "retail dominance + e-commerce acceleration, ad business scaling"),
     "CAVA":  ("Cava Group",           "long_term",  "fast-casual Mediterranean, same-store sales +14%, rapid expansion"),
     "ONON":  ("On Running",           "long_term",  "premium running/lifestyle brand, 30%+ revenue growth, DTC mix rising"),
-    "XOM":   ("ExxonMobil",           "long_term",  "oil/gas major, Pioneer acquisition synergies, strong FCF dividend"),
-    "CVX":   ("Chevron",              "long_term",  "oil/gas major, Hess acquisition, consistent buyback program"),
+    "CRWD":  ("CrowdStrike",          "long_term",  "next-gen EDR/XDR cybersecurity, Falcon platform NRR >120%, ARR $3.4B"),
+    "PANW":  ("Palo Alto Networks",   "long_term",  "largest cybersecurity revenue, platformization shifting to annual contracts"),
+    "ADBE":  ("Adobe",                "long_term",  "creative/document cloud monopoly, Firefly AI monetization, 90%+ gross margin"),
+    "ANET":  ("Arista Networks",      "long_term",  "cloud spine networking, >40% gross margins, data center + AI infrastructure"),
+    "TTD":   ("The Trade Desk",       "long_term",  "programmatic advertising platform, CTV growth, UID2 identity advantage"),
+    "APP":   ("AppLovin",             "long_term",  "AI-driven mobile ad platform, AXON 2.0 engine, 70%+ adj EBITDA margins"),
+    "AXON":  ("Axon Enterprise",      "long_term",  "law enforcement tech platform, Taser + cameras + AI software, 30%+ revenue growth"),
     # ── Bargain ($5–$20) ──────────────────────────────────────────────────────
     "SOFI":  ("SoFi Technologies",    "bargain",    "digital bank + financial services, bank charter, growing deposits"),
     "NU":    ("Nu Holdings",          "bargain",    "fastest-growing LatAm neobank, 100M+ customers, Brazil focus"),
@@ -751,7 +759,7 @@ MARKET:
 
 INVESTMENT UNIVERSE — select ONLY tickers listed below:
 
-LONG-TERM (quality compounders, 6–18 month holds):
+LONG-TERM (quality compounders, non-consensus — NOT mega-cap household names, 6–18 month holds):
 {section("long_term")}
 
 BARGAIN ($5–$20 stocks, value + turnaround, 6–12 month holds):
@@ -761,7 +769,7 @@ HIDDEN GEMS (small/mid-cap under-the-radar, 12–24 month holds):
 {section("hidden_gem")}
 
 YOUR JOB:
-1. Select exactly 3 LONG-TERM, 3 BARGAIN, 3 HIDDEN GEM picks (9 total)
+1. Select exactly 5 LONG-TERM, 5 BARGAIN, 5 HIDDEN GEM picks (15 total)
 2. Base selection on company quality, business fundamentals, and current macro regime
 3. For each pick:
    - stop_pct: stop distance below entry (e.g. 0.12 = 12%)
@@ -780,15 +788,15 @@ Respond ONLY with valid JSON, no markdown:
   "picks": [
     {{
       "rank": 1,
-      "ticker": "MSFT",
+      "ticker": "CRWD",
       "category": "long_term",
       "trade_type": "compounder",
       "stop_pct": 0.12,
       "target_pct": 0.28,
       "confidence": 8,
-      "thesis": "Azure grew 31% YoY in fiscal Q2 2025 and Copilot is now embedded in 365 plans used by 70% of Fortune 500. At ~30x forward earnings with 15% EPS growth, this is a best-in-class compounder at a reasonable price.",
-      "catalyst": "Fiscal Q3 2025 earnings — Azure acceleration above 33% expected",
-      "key_risk": "AI capex inflation compresses near-term FCF and margin expansion slows"
+      "thesis": "CrowdStrike ARR grew 23% YoY to $3.4B with Falcon platform NRR above 120% and 60%+ of customers using 5+ modules. At ~60x forward FCF with durable 20%+ revenue growth, it's a category-defining compounder with room to run.",
+      "catalyst": "FY2025 Q4 earnings — expecting accelerated module adoption from platform consolidation deals",
+      "key_risk": "Macro-driven IT budget cuts delay enterprise renewals and slow NRR expansion"
     }}
   ],
   "generated_at": "{date_str}"
@@ -797,7 +805,7 @@ Respond ONLY with valid JSON, no markdown:
 
 async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> Dict:
     """
-    Fast picks: Claude selects 3 per category from registry (training knowledge),
+    Fast picks: Claude selects 5 per category from registry (training knowledge),
     then Finnhub provides live prices for entry/stop/target. ~30s total, no Yahoo Finance.
     """
     from services import finnhub_service
@@ -806,7 +814,7 @@ async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> 
 
     prompt = _build_quick_picks_prompt(market_overview, date_str)
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=2800))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=4000))
 
     try:
         parsed = _parse_response(raw)
@@ -903,6 +911,101 @@ async def generate_quick_unified_picks(market_overview: Dict, date_str: str) -> 
         "market_summary": parsed.get("market_summary", ""),
         "bias":           parsed.get("bias", regime["overall_bias"]),
         "generated_at":   date_str,
+    }
+
+
+async def generate_replacement_pick(
+    category: str,
+    exclude_tickers: List[str],
+    market_overview: Dict,
+    date_str: str,
+) -> Optional[Dict]:
+    """
+    Generate one replacement pick for a given category. ~350 tokens total — ~86% cheaper
+    than a full refresh. Used by POST /ai/replace-pick.
+    """
+    from services import finnhub_service
+
+    available = {
+        t: entry
+        for t, entry in _COMPANY_REGISTRY.items()
+        if entry[1] == category and t not in exclude_tickers
+    }
+    if not available:
+        return None
+
+    regime = assess_market_regime(market_overview)
+    vix   = market_overview.get("vix") or 20
+    spy_c = market_overview.get("spy_change_pct") or 0
+
+    cat_labels = {
+        "long_term":  "LONG-TERM quality compounder (6–18 month, non-consensus name)",
+        "bargain":    "BARGAIN value/turnaround ($5–$20, 6–12 month)",
+        "hidden_gem": "HIDDEN GEM small/mid-cap under-the-radar (12–24 month)",
+    }
+    lines = "\n".join(
+        f"  {t}: {entry[0]} — {entry[2]}" for t, entry in available.items()
+    )
+
+    prompt = f"""You are a stock picker. Today is {date_str}. Market: SPY {spy_c:+.1f}%, VIX {vix:.1f}, {regime["direction"]}.
+
+Pick ONE {cat_labels[category]} from this list:
+{lines}
+
+Return ONLY valid JSON (no markdown):
+{{"ticker":"X","trade_type":"compounder","stop_pct":0.12,"target_pct":0.30,"confidence":8,"thesis":"2 sentences with specific data (revenue %, margins, valuation).","catalyst":"one specific near-term trigger","key_risk":"one main downside risk"}}"""
+
+    loop = asyncio.get_running_loop()
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=300))
+
+    try:
+        pick_raw = _parse_response(raw)
+    except Exception:
+        return None
+
+    ticker = (pick_raw.get("ticker") or "").upper()
+    if ticker not in _COMPANY_REGISTRY or ticker in exclude_tickers:
+        return None
+    if _COMPANY_REGISTRY[ticker][1] != category:
+        return None
+
+    # Fetch live price
+    fh_data = await finnhub_service.get_quote(ticker) or {}
+    price = fh_data.get("price") or fh_data.get("prev_close")
+    if not price:
+        bars = await finnhub_service.get_candles(ticker, period="1mo", interval="1d")
+        if isinstance(bars, list) and bars:
+            price = bars[-1].get("close")
+
+    stop_pct   = max(0.05, min(0.35, float(pick_raw.get("stop_pct")   or 0.12)))
+    target_pct = max(0.10, min(1.50, float(pick_raw.get("target_pct") or 0.30)))
+
+    if price:
+        entry_low  = round(float(price) * 0.990, 2)
+        entry_high = round(float(price) * 1.015, 2)
+        stop_loss  = round(entry_low * (1 - stop_pct), 2)
+        target     = round(entry_low * (1 + target_pct), 2)
+        risk       = max(entry_low - stop_loss, 0.01)
+        reward     = max(target - entry_low, 0)
+        rr         = f"1:{reward/risk:.1f}"
+    else:
+        entry_low = entry_high = stop_loss = target = None
+        rr = "—"
+
+    return {
+        "ticker":      ticker,
+        "name":        _COMPANY_REGISTRY[ticker][0],
+        "category":    category,
+        "trade_type":  pick_raw.get("trade_type", "growth"),
+        "entry_low":   entry_low,
+        "entry_high":  entry_high,
+        "stop_loss":   stop_loss,
+        "target":      target,
+        "risk_reward": rr,
+        "confidence":  max(1, min(10, int(pick_raw.get("confidence") or 7))),
+        "thesis":      pick_raw.get("thesis", ""),
+        "catalyst":    pick_raw.get("catalyst", ""),
+        "key_risk":    pick_raw.get("key_risk", ""),
     }
 
 

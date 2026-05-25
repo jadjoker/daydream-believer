@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { api } from "@/lib/api";
 import { formatPrice } from "@/lib/utils";
 import {
-  Sparkles, RefreshCw,
+  Sparkles, RefreshCw, Loader2,
   ShieldAlert, Target, ArrowRight, AlertTriangle,
   ChevronDown, ChevronUp,
 } from "lucide-react";
@@ -299,16 +299,21 @@ function PicksPanel({
   loading,
   onTickerSelect,
   onSimulate,
+  onPickSwapped,
+  allPicksForSwap,
 }: {
   data: any;
   loading: boolean;
   onTickerSelect: (t: string) => void;
   onSimulate?: (t: string) => void;
+  onPickSwapped?: (replacedTicker: string, newPick: any) => void;
+  allPicksForSwap?: any[];
 }) {
   const [expandedPick, setExpandedPick] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [override, setOverride] = useState<any>(null);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [swapping, setSwapping] = useState<Record<string, boolean>>({});
 
   const modeData = override ?? data;
   const allPicks: any[] = modeData?.picks ?? [];
@@ -338,6 +343,24 @@ function PicksPanel({
       if (result?.picks?.length > 0) setOverride(result);
     } catch {}
     finally { setRetrying(false); }
+  };
+
+  const handleSwap = async (pick: any) => {
+    if (swapping[pick.ticker]) return;
+    setSwapping(s => ({ ...s, [pick.ticker]: true }));
+    try {
+      const exclude = (allPicksForSwap ?? allPicks).map((p: any) => p.ticker);
+      const result = await api.aiReplacePick(pick.ticker, pick.category, exclude) as any;
+      if (result?.pick) {
+        onPickSwapped?.(pick.ticker, result.pick);
+        // Also update local override if present
+        if (override) {
+          const updated = override.picks.map((p: any) => p.ticker === pick.ticker ? result.pick : p);
+          setOverride({ ...override, picks: updated });
+        }
+      }
+    } catch {}
+    finally { setSwapping(s => ({ ...s, [pick.ticker]: false })); }
   };
 
   const isLoading = loading || retrying;
@@ -431,6 +454,17 @@ function PicksPanel({
                         <span className={`flex items-center text-xs font-bold tabular-nums ${
                           pick.confidence >= 8 ? "text-emerald-400" : pick.confidence >= 6 ? "text-yellow-400" : "text-red-400"
                         }`}>{pick.confidence}/10<MetricTooltip term="Confidence" /></span>
+                        <button
+                          onClick={e => { e.stopPropagation(); handleSwap(pick); }}
+                          disabled={swapping[pick.ticker] || isLoading}
+                          title="Swap this pick"
+                          className="p-1 text-zinc-600 hover:text-cyan-400 active:text-cyan-300 disabled:opacity-40 disabled:cursor-wait transition-colors rounded"
+                          aria-label="Replace this pick"
+                        >
+                          {swapping[pick.ticker]
+                            ? <Loader2 size={10} className="animate-spin" />
+                            : <RefreshCw size={10} />}
+                        </button>
                         <button
                           onClick={() => {
                             const expanding = !isExpanded;
@@ -574,6 +608,16 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
     // Intentionally NOT calling setRunKey — avoids triggering useEffect which would fire a second aiRefresh()
   };
 
+  const handlePickSwapped = (replacedTicker: string, newPick: any) => {
+    setPicksData((prev: any) => {
+      if (!prev?.unified?.picks) return prev;
+      const updated = prev.unified.picks.map((p: any) =>
+        p.ticker === replacedTicker ? { ...newPick, rank: p.rank } : p
+      );
+      return { ...prev, unified: { ...prev.unified, picks: updated } };
+    });
+  };
+
   const generatingMsg = loadingSeconds > 45
     ? "Almost there…"
     : loadingSeconds > 5
@@ -631,6 +675,8 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
           loading={phase === "generating"}
           onTickerSelect={onTickerSelect}
           onSimulate={onSimulate}
+          onPickSwapped={handlePickSwapped}
+          allPicksForSwap={picksData?.unified?.picks}
         />
       )}
 
