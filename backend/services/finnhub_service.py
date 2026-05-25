@@ -350,6 +350,86 @@ async def get_ticker_earnings_data(ticker: str) -> Optional[Dict]:
     return result or None
 
 
+async def get_financial_calendar(ticker: str) -> Dict:
+    """Full financial calendar for a ticker: earnings history, next date, dividends."""
+    from services.cache_service import get_cached, set_cached
+    _key = f"fh_cal:{ticker.upper()}"
+    cached = get_cached(_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+    history_raw, calendar_raw, div_raw = await asyncio.gather(
+        _get("/stock/earnings", {"symbol": ticker, "limit": "8"}),
+        _get("/calendar/earnings", {
+            "from": today.strftime("%Y-%m-%d"),
+            "to": (today + timedelta(weeks=16)).strftime("%Y-%m-%d"),
+            "symbol": ticker,
+        }),
+        _get("/stock/dividend", {
+            "symbol": ticker,
+            "from": (today - timedelta(days=365)).strftime("%Y-%m-%d"),
+            "to": today.strftime("%Y-%m-%d"),
+        }),
+        return_exceptions=True,
+    )
+
+    # ── Earnings history ──────────────────────────────────────────────────────
+    history = []
+    if isinstance(history_raw, list):
+        history_raw.sort(key=lambda x: x.get("period", ""), reverse=True)
+        for q in history_raw[:8]:
+            actual = q.get("actual")
+            estimate = q.get("estimate")
+            surprise = q.get("surprisePercent")
+            history.append({
+                "period":       q.get("period", ""),
+                "actual":       round(float(actual), 2) if actual is not None else None,
+                "estimate":     round(float(estimate), 2) if estimate is not None else None,
+                "surprise_pct": round(float(surprise), 1) if surprise is not None else None,
+                "beat":         (float(surprise) > 0) if surprise is not None else None,
+            })
+
+    # ── Next earnings ─────────────────────────────────────────────────────────
+    next_earnings: Dict = {}
+    if isinstance(calendar_raw, dict):
+        for e in (calendar_raw.get("earningsCalendar") or []):
+            if (e.get("symbol") or "").upper() == ticker.upper():
+                nd = e.get("date", "")
+                try:
+                    days_out = (date.fromisoformat(nd) - today).days
+                except Exception:
+                    days_out = None
+                next_earnings = {
+                    "date":        nd,
+                    "days_out":    days_out,
+                    "eps_estimate": e.get("epsEstimate"),
+                    "rev_estimate": e.get("revenueEstimate"),
+                    "timing":      e.get("hour", ""),  # "bmo" / "amc" / "dmh"
+                }
+                break
+
+    # ── Dividends ─────────────────────────────────────────────────────────────
+    dividends: list = []
+    if isinstance(div_raw, list):
+        for d in sorted(div_raw, key=lambda x: x.get("date", ""), reverse=True)[:4]:
+            dividends.append({
+                "ex_date":      d.get("date", ""),
+                "pay_date":     d.get("payDate", ""),
+                "amount":       d.get("amount"),
+                "currency":     d.get("currency", "USD"),
+            })
+
+    result = {
+        "ticker":        ticker.upper(),
+        "history":       history,
+        "next_earnings": next_earnings,
+        "dividends":     dividends,
+    }
+    set_cached(_key, result, ttl=3600)
+    return result
+
+
 async def get_fundamentals_mapped(ticker: str) -> Optional[Dict]:
     """
     Fetch Finnhub basic financials and normalize to the same schema as

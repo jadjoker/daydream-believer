@@ -6,7 +6,7 @@ import { formatPrice, formatMarketCap } from "@/lib/utils";
 import {
   Search, Sparkles, X, TrendingUp, TrendingDown, Minus,
   SendHorizonal, Bot, User, Loader2, ChevronDown, ChevronUp,
-  Target, ShieldAlert, ArrowUpRight, RotateCcw,
+  Target, ShieldAlert, ArrowUpRight, RotateCcw, Calendar,
 } from "lucide-react";
 import { MetricTooltip } from "./MetricTooltip";
 
@@ -104,6 +104,144 @@ function MdMessage({ content }: { content: string }) {
   }
 
   return <div className="space-y-1 leading-relaxed">{nodes}</div>;
+}
+
+// ─── Financial calendar ───────────────────────────────────────────────────────
+
+interface CalendarData {
+  ticker: string;
+  history: { period: string; actual: number | null; estimate: number | null; surprise_pct: number | null; beat: boolean | null }[];
+  next_earnings: { date: string; days_out: number | null; eps_estimate: number | null; timing: string };
+  dividends: { ex_date: string; pay_date: string; amount: number | null; currency: string }[];
+}
+
+function earningsUrgencyClass(daysOut: number | null): string {
+  if (daysOut === null) return "text-zinc-400 border-zinc-700";
+  if (daysOut <= 7)  return "text-red-400 border-red-700/60 bg-red-500/10";
+  if (daysOut <= 30) return "text-yellow-400 border-yellow-700/60 bg-yellow-500/10";
+  return "text-emerald-400 border-emerald-700/60 bg-emerald-500/10";
+}
+
+function FinancialCalendar({ ticker }: { ticker: string }) {
+  const [cal, setCal] = useState<CalendarData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!ticker) return;
+    setLoading(true);
+    setCal(null);
+    api.stockCalendar(ticker).then((d: any) => { setCal(d); setLoading(false); }).catch(() => setLoading(false));
+  }, [ticker]);
+
+  if (loading) {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 animate-pulse space-y-2">
+        <div className="h-3 w-28 bg-zinc-800 rounded" />
+        <div className="h-8 bg-zinc-800 rounded" />
+        <div className="h-16 bg-zinc-800 rounded" />
+      </div>
+    );
+  }
+  if (!cal) return null;
+
+  const { next_earnings: ne, history, dividends } = cal;
+  const hasNext = ne?.date;
+  const hasHistory = history?.length > 0;
+  const hasDividends = dividends?.length > 0;
+
+  if (!hasNext && !hasHistory && !hasDividends) return null;
+
+  const timingLabel: Record<string, string> = { bmo: "Pre-market", amc: "After-close", dmh: "During hours" };
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+        <Calendar size={12} className="text-zinc-500 shrink-0" />
+        <span className="text-xs font-semibold text-zinc-300">Financial Calendar</span>
+      </div>
+
+      <div className="px-4 py-3 space-y-4">
+        {/* Next earnings */}
+        {hasNext && (
+          <div>
+            <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">Next Earnings</div>
+            <div className={`inline-flex items-center gap-2 border rounded-lg px-3 py-2 text-xs font-medium ${earningsUrgencyClass(ne.days_out)}`}>
+              <Calendar size={11} />
+              <span>{ne.date}</span>
+              {ne.days_out !== null && (
+                <span className="opacity-70">
+                  {ne.days_out === 0 ? "Today" : ne.days_out === 1 ? "Tomorrow" : `in ${ne.days_out}d`}
+                </span>
+              )}
+              {ne.timing && timingLabel[ne.timing] && (
+                <span className="opacity-60 text-[10px]">· {timingLabel[ne.timing]}</span>
+              )}
+            </div>
+            {ne.eps_estimate != null && (
+              <p className="text-[11px] text-zinc-500 mt-1.5">EPS estimate: <span className="text-zinc-300">${ne.eps_estimate.toFixed(2)}</span></p>
+            )}
+          </div>
+        )}
+
+        {/* EPS history */}
+        {hasHistory && (
+          <div>
+            <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">EPS History</div>
+            <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-[11px] border-collapse">
+                <thead>
+                  <tr className="text-zinc-600">
+                    <th className="text-left pb-1.5 pl-1 font-normal">Period</th>
+                    <th className="text-right pb-1.5 font-normal">Est.</th>
+                    <th className="text-right pb-1.5 font-normal">Actual</th>
+                    <th className="text-right pb-1.5 pr-1 font-normal">Surprise</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60">
+                  {history.map((q) => (
+                    <tr key={q.period} className="hover:bg-zinc-800/30 transition-colors">
+                      <td className="py-1.5 pl-1 text-zinc-400">{q.period}</td>
+                      <td className="py-1.5 text-right text-zinc-500 tabular-nums">
+                        {q.estimate != null ? `$${q.estimate.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums font-medium text-zinc-200">
+                        {q.actual != null ? `$${q.actual.toFixed(2)}` : "—"}
+                      </td>
+                      <td className={`py-1.5 pr-1 text-right tabular-nums font-semibold ${
+                        q.beat === true ? "text-emerald-400" : q.beat === false ? "text-red-400" : "text-zinc-500"
+                      }`}>
+                        {q.surprise_pct != null ? `${q.surprise_pct > 0 ? "+" : ""}${q.surprise_pct.toFixed(1)}%` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Dividends */}
+        {hasDividends && (
+          <div>
+            <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">Recent Dividends</div>
+            <div className="space-y-1.5">
+              {dividends.slice(0, 4).map((d, i) => (
+                <div key={i} className="flex items-center justify-between text-[11px]">
+                  <div className="text-zinc-500">
+                    Ex: <span className="text-zinc-300">{d.ex_date}</span>
+                    {d.pay_date && <span className="text-zinc-600"> · Pay: {d.pay_date}</span>}
+                  </div>
+                  {d.amount != null && (
+                    <span className="text-emerald-400 font-semibold tabular-nums">${d.amount.toFixed(4)}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ─── Recommendation badge ─────────────────────────────────────────────────────
@@ -466,6 +604,9 @@ export default function StockSearch({ onTickerSelect }: StockSearchProps) {
           )}
         </div>
       )}
+
+      {/* ── Financial calendar ───────────────────────────────────────────── */}
+      {selectedTicker && <FinancialCalendar ticker={selectedTicker} />}
 
       {/* ── Chat section ──────────────────────────────────────────────────── */}
       {analysis?.unified && (

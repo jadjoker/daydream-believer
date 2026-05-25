@@ -33,6 +33,7 @@ export const api = {
   basicFinancials: (ticker: string) => apiFetch(`/stocks/basic-financials/${ticker}`),
   multiQuote: (tickers: string[]) =>
     apiFetch(`/stocks/multi-quote?tickers=${tickers.join(",")}`),
+  stockCalendar: (ticker: string) => apiFetch(`/stocks/financial-calendar/${ticker}`),
 
   // Sentiment
   sentiment: (ticker: string) => apiFetch(`/sentiment/${ticker}`),

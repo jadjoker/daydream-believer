@@ -117,3 +117,9 @@ async def get_multi_quote(tickers: str = Query(..., description="Comma-separated
         raise HTTPException(400, "Max 50 tickers")
     quotes = await yf_svc.get_multiple_quotes(ticker_list)
     return {"quotes": quotes}
+
+
+@router.get("/financial-calendar/{ticker}")
+async def get_financial_calendar(ticker: str):
+    """Earnings history, next earnings date, and recent dividends for a ticker."""
+    return await fh.get_financial_calendar(ticker.upper().strip())
