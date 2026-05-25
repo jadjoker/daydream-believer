@@ -1499,18 +1499,22 @@ async def analyze_ticker(
 
     regime = assess_market_regime(market_overview)
 
-    quote_yf, ta, quote_fh = await asyncio.gather(
+    quote_yf, ta, quote_fh, analyst, earnings_raw = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="3mo", interval="1d"),
         finnhub_service.get_quote(ticker),
+        finnhub_service.get_analyst_summary(ticker),
+        finnhub_service.get_ticker_earnings_data(ticker),
         return_exceptions=True,
     )
 
     quote_data = quote_yf if isinstance(quote_yf, dict) else {}
     ta_data = ta if isinstance(ta, dict) else {}
     fh_data = quote_fh if isinstance(quote_fh, dict) else {}
+    analyst_data = analyst if isinstance(analyst, dict) else {}
+    earnings_data = earnings_raw if isinstance(earnings_raw, dict) else {}
 
-    price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
+    price = fh_data.get("price") or fh_data.get("prev_close") or quote_data.get("price") or ta_data.get("price") or 0
     name = quote_data.get("name") or fh_data.get("name") or ticker
     change_pct = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
     sector = quote_data.get("sector") or fh_data.get("sector") or ""
@@ -1559,31 +1563,77 @@ async def analyze_ticker(
     rr_est = round((levels["target_2r"] - price) / levels["risk_per_share"], 1) if levels["risk_per_share"] > 0 else 0
     signals_str = ", ".join(signals) if signals else f"Day change: {change_pct:+.1f}%"
 
+    # ── Analyst consensus ─────────────────────────────────────────────────────
+    a_buy  = analyst_data.get("analyst_buy", 0) or 0
+    a_hold = analyst_data.get("analyst_hold", 0) or 0
+    a_sell = analyst_data.get("analyst_sell", 0) or 0
+    a_target = analyst_data.get("target_price")
+    analyst_line = ""
+    if (a_buy + a_hold + a_sell) > 0:
+        analyst_line = f"Analyst consensus: {a_buy}B/{a_hold}H/{a_sell}S"
+        if a_target and price:
+            analyst_line += f" | Street target ${a_target:.0f} ({(a_target-price)/price*100:+.0f}%)"
+
+    # ── Earnings proximity ────────────────────────────────────────────────────
+    earnings_line = ""
+    earnings_warning = ""
+    if earnings_data:
+        next_date = earnings_data.get("next_date")
+        last_surprise = earnings_data.get("last_surprise_pct")
+        if next_date:
+            from datetime import date as _date
+            try:
+                nd = _date.fromisoformat(next_date)
+                days_out = (nd - _date.today()).days
+                if 0 <= days_out <= 14:
+                    earnings_line = f"Earnings in {days_out} day{'s' if days_out != 1 else ''} ({next_date})"
+                    if last_surprise is not None:
+                        earnings_line += f" | Last EPS surprise: {last_surprise:+.1f}%"
+                    if days_out <= 3:
+                        earnings_warning = "⚠️ EARNINGS IN ≤3 DAYS — elevated IV risk; directional trades should be avoided unless thesis is earnings-driven."
+            except Exception:
+                pass
+
+    # ── 52-week range context ─────────────────────────────────────────────────
+    w52h = quote_data.get("week_52_high")
+    w52l = quote_data.get("week_52_low")
+    range_line = ""
+    if w52h and w52l and w52h > w52l:
+        range_pct = (price - w52l) / (w52h - w52l) * 100
+        pct_from_high = (w52h - price) / w52h * 100
+        range_line = f"52W: ${w52l:.2f}–${w52h:.2f} | at {range_pct:.0f}% of range ({pct_from_high:.1f}% off 52W high)"
+
+    # ── Short interest ────────────────────────────────────────────────────────
+    short_ratio = quote_data.get("short_ratio") or fh_data.get("short_ratio")
+    short_line = f"Short ratio: {short_ratio:.1f}d to cover" if short_ratio else ""
+
+    extra_lines = "\n".join(x for x in [analyst_line, earnings_line, range_line, short_line] if x)
+
     time_note = _market_time_context(market_overview, next_trading_day_label).strip()
     context_note = time_note if time_note else "Using most recent available price and indicator data."
 
     prompt = f"""You are an expert day trader. {context_note}
 Analyze {ticker} ({name}) and decide: BUY, HOLD, or AVOID for {next_trading_day_label}'s open.
 
-Stock data:
+PRICE & TECHNICALS:
 - Price: ${price:.2f} | Day change: {change_pct:+.1f}% | Sector: {sector}
 - TA summary: {ta_summary}
 - Signals: {signals_str}
-- Python-suggested Entry: ${levels['entry_low']:.2f} – ${levels['entry_high']:.2f}
-- Python-suggested Stop: ${levels['stop_loss']:.2f}
-- Python-suggested Target: ${levels['target_2r']:.2f}
-- Est. R/R: 1:{rr_est} ({levels['method']})
+- Entry: ${levels['entry_low']:.2f}–${levels['entry_high']:.2f} | Stop: ${levels['stop_loss']:.2f} | Target: ${levels['target_2r']:.2f} | R/R 1:{rr_est}
 
-Market regime:
-- Bias: {regime['overall_bias']} | VIX: {regime['vix']} ({regime['vix_regime']})
-- Direction: {regime['direction']}
+CONTEXT:
+{extra_lines if extra_lines else "No additional context available."}
+{earnings_warning}
 
-Decision criteria:
-- BUY: setup is clear, TA signals align with regime, risk/reward is acceptable
-- HOLD: mixed signals or unclear setup — wait for confirmation at the open
-- AVOID: weak/broken setup or trade goes against market regime
+MARKET: Bias {regime['overall_bias']} | VIX {regime['vix']} ({regime['vix_regime']}) | {regime['direction']}
 
-Thesis must cite specific numeric values from the data above (e.g. "RSI at 44", not "oversold conditions").
+DECISION RULES:
+- BUY: clean TA setup + regime alignment + R/R ≥ 1:1.5
+- HOLD: mixed signals, weak volume, or setup needs confirmation at open
+- AVOID: broken setup, counter-regime, or earnings within 3 days without clear catalyst
+- Lower confidence if analyst consensus is mostly SELL or Street target is below current price
+
+Thesis must cite at least 2 specific numeric values (e.g. "RSI at 44, ADX 31 trending"). Do NOT use vague phrases like "strong momentum" without a number.
 
 Respond ONLY with valid JSON, no markdown:
 {{
@@ -1596,9 +1646,9 @@ Respond ONLY with valid JSON, no markdown:
   "target": {levels['target_2r']},
   "risk_reward": "1:{rr_est}",
   "confidence": 6,
-  "thesis": "2 sentences citing specific numeric signals for {next_trading_day_label}.",
-  "catalyst": "Specific trigger for this trade",
-  "key_risk": "Main risk to this setup"
+  "thesis": "2 sentences citing at least 2 specific numeric values each.",
+  "catalyst": "Specific trigger for this trade at {next_trading_day_label}'s open",
+  "key_risk": "Primary setup risk or invalidation level"
 }}"""
 
     loop = asyncio.get_running_loop()
@@ -1634,17 +1684,32 @@ Respond ONLY with valid JSON, no markdown:
 
 # ─── Long-term single-ticker analysis ────────────────────────────────────────
 
+_LT_MODEL_LENS: Dict[str, str] = {
+    "mega":       "dominant incumbent — evaluate valuation vs moat sustainability and ability to compound at scale",
+    "saas":       "recurring revenue flywheel — ARR growth, NRR >120%, gross margin expansion are the key metrics",
+    "platform":   "network-effect compounder — user growth trajectory, take-rate expansion, moat defensibility",
+    "fintech":    "financial infrastructure — payment volume growth, margin expansion, regulatory positioning",
+    "deeptech":   "technology moat — R&D differentiation, path to dominant revenue",
+    "healthcare": "innovation durability — pipeline, patent runway, pricing power",
+    "consumer":   "brand compounder — unit economics, same-store sales growth, pricing power; not a platform moat thesis",
+    "financial":  "capital allocator — NIM, credit quality cycle, ROE consistency, dividend growth",
+    "industrial": "durable cash flow — cycle positioning, capital discipline, long-term demand tailwinds",
+    "energy":     "commodity + capital return — reserve life, dividend sustainability, energy transition positioning",
+}
+
+
 async def _analyze_ticker_longterm(ticker: str) -> Dict:
     from services.technical_analysis import get_technical_signals
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    quote, ta, fund, analyst, insider = await asyncio.gather(
+    quote, ta, fund, analyst, insider, earnings_raw = await asyncio.gather(
         yf_svc.get_quote(ticker),
         get_technical_signals(ticker, period="1y", interval="1wk"),
         finnhub_service.get_fundamentals_mapped(ticker),
         finnhub_service.get_analyst_summary(ticker),
         finnhub_service.get_insider_summary(ticker),
+        finnhub_service.get_ticker_earnings_data(ticker),
         return_exceptions=True,
     )
 
@@ -1653,6 +1718,7 @@ async def _analyze_ticker_longterm(ticker: str) -> Dict:
     fund_data = fund if isinstance(fund, dict) else {}
     analyst_data = analyst if isinstance(analyst, dict) else {}
     insider_signal = insider if isinstance(insider, str) else ""
+    earnings_data = earnings_raw if isinstance(earnings_raw, dict) else {}
 
     price = quote_data.get("price") or ta_data.get("price") or 0
     name = quote_data.get("name", ticker)
@@ -1662,13 +1728,12 @@ async def _analyze_ticker_longterm(ticker: str) -> Dict:
     if not price:
         return {"ticker": ticker, "error": f"Could not fetch price data for {ticker}"}
 
-    entry_low = round(price * 0.97, 2)
+    # ATR-based stops (falls back to fixed % if TA unavailable)
+    atr_14 = ta_data.get("atr_14") or (price * 0.02)
+    entry_low  = round(price * 0.97, 2)
     entry_high = round(price * 1.03, 2)
-    stop_loss = round(price * 0.85, 2)
-    target = round(price * 1.25, 2)
-    ema50 = ta_data.get("ema_50")
-    if ema50 and ema50 < price * 0.92:
-        stop_loss = round(ema50 * 0.97, 2)
+    stop_loss  = round(max(price - 3.0 * atr_14, price * 0.78), 2)
+    target     = round(price * 1.45, 2)
     rr = round((target - price) / max(price - stop_loss, 0.01), 1)
 
     def _pct(v, label):
@@ -1678,67 +1743,101 @@ async def _analyze_ticker_longterm(ticker: str) -> Dict:
         f"Trailing P/E: {fund_data['pe_ratio']:.1f}" if fund_data.get("pe_ratio") else None,
         f"Forward P/E: {fund_data['forward_pe']:.1f}" if fund_data.get("forward_pe") else None,
         f"PEG ratio: {fund_data['peg_ratio']:.2f}" if fund_data.get("peg_ratio") else None,
+        f"P/S: {fund_data['ps_ratio']:.1f}" if fund_data.get("ps_ratio") else None,
         _pct(fund_data.get("revenue_growth"), "Revenue growth YoY"),
         _pct(fund_data.get("earnings_growth"), "EPS growth YoY"),
-        _pct(fund_data.get("profit_margin"), "Profit margin"),
+        _pct(fund_data.get("profit_margin"), "Net margin"),
         _pct(fund_data.get("gross_margins"), "Gross margin"),
+        _pct(fund_data.get("operating_margin"), "Op margin"),
         _pct(fund_data.get("roe"), "ROE"),
-        f"Debt/Equity: {fund_data['debt_to_equity']:.1f}" if fund_data.get("debt_to_equity") is not None else None,
-        f"Dividend yield: {fund_data['dividend_yield']*100:.1f}%" if fund_data.get("dividend_yield") else None,
-        f"Free cash flow: ${fund_data['free_cashflow']/1e9:.1f}B" if fund_data.get("free_cashflow") else None,
+        f"D/E: {fund_data['debt_to_equity']:.1f}" if fund_data.get("debt_to_equity") is not None else None,
+        f"FCF: ${fund_data['free_cashflow']/1e9:.1f}B" if fund_data.get("free_cashflow") else None,
+        f"Div yield: {fund_data['dividend_yield']*100:.1f}%" if fund_data.get("dividend_yield") else None,
     ] if x]
-    fund_str = "\n".join(fund_lines) if fund_lines else "Fundamental data not available for this ticker."
+    fund_str = " | ".join(fund_lines) if fund_lines else "Fundamental data not available for this ticker."
 
-    model_context = f"\nBusiness model: {model} — {{\n  'mega': 'focus on valuation vs moat strength',\n  'saas': 'ARR growth rate and net revenue retention are key',\n  'platform': 'network effects and user monetization trajectory',\n  'fintech': 'payment volume growth and regulatory positioning',\n  'deeptech': 'technology differentiation and path to profitability',\n  'healthcare': 'pipeline, patent life, and regulatory catalysts',\n  'consumer': 'unit economics and brand durability — not a platform moat thesis',\n  'financial': 'NIM and credit quality cycle',\n  'industrial': 'cycle positioning and capital discipline',\n  'energy': 'commodity exposure and dividend sustainability',\n}}.get('{model}', '')" if model else ""
+    # Fixed bug: was embedding raw Python dict literal as text in the prompt
+    model_context = (f"\nBusiness model: {model} — {_LT_MODEL_LENS.get(model, 'evaluate long-term compounding potential')}") if model else ""
 
-    lt_analyst_str = ""
-    a_buy = analyst_data.get("analyst_buy", 0) or 0
+    # 52-week range
+    w52h = quote_data.get("week_52_high")
+    w52l = quote_data.get("week_52_low")
+    range_str = ""
+    if w52h and w52l and w52h > w52l:
+        pct = (price - w52l) / (w52h - w52l) * 100
+        off_high = (w52h - price) / w52h * 100
+        range_str = f"52W range: ${w52l:.2f}–${w52h:.2f} | at {pct:.0f}% of range ({off_high:.1f}% off high)"
+
+    a_buy  = analyst_data.get("analyst_buy", 0) or 0
     a_hold = analyst_data.get("analyst_hold", 0) or 0
     a_sell = analyst_data.get("analyst_sell", 0) or 0
     a_target = analyst_data.get("target_price")
+    a_target_low = analyst_data.get("target_low")
+    a_target_high = analyst_data.get("target_high")
+    analyst_str = ""
     if (a_buy + a_hold + a_sell) > 0:
-        lt_analyst_str = f"Analyst consensus: {a_buy}B/{a_hold}H/{a_sell}S"
+        analyst_str = f"Analyst consensus: {a_buy}B/{a_hold}H/{a_sell}S"
         if a_target and price:
-            upside = (a_target - price) / price * 100
-            lt_analyst_str += f" | Street target ${a_target:.0f} ({upside:+.0f}% from current)"
-    lt_insider_str = f"Insider activity: {insider_signal} {'▲' if insider_signal == 'buying' else '▼' if insider_signal == 'selling' else ''}" if insider_signal else ""
-    extra_lines = "\n".join(x for x in [lt_analyst_str, lt_insider_str] if x)
+            analyst_str += f" | Target ${a_target:.0f} ({(a_target-price)/price*100:+.0f}%)"
+            if a_target_low and a_target_high:
+                analyst_str += f" range ${a_target_low:.0f}–${a_target_high:.0f}"
+    insider_str = f"Insiders: {insider_signal} {'▲' if insider_signal == 'buying' else '▼' if insider_signal == 'selling' else ''}" if insider_signal else ""
 
-    prompt = f"""You are an expert long-term investor. Analyze {ticker} ({name}) for a 6–12 month hold.
+    earnings_str = ""
+    if earnings_data:
+        nd = earnings_data.get("next_date")
+        surprise = earnings_data.get("last_surprise_pct")
+        if nd:
+            from datetime import date as _date
+            try:
+                days_out = (_date.fromisoformat(nd) - _date.today()).days
+                if days_out >= 0:
+                    earnings_str = f"Next earnings: {nd} ({days_out}d out)"
+                    if surprise is not None:
+                        earnings_str += f" | Last EPS surprise: {surprise:+.1f}%"
+            except Exception:
+                pass
 
-Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}{f' | Business model: {model}' if model else ''}
+    extra_lines = "\n".join(x for x in [analyst_str, insider_str, earnings_str, range_str] if x)
 
-FUNDAMENTALS:
-{fund_str}
-{extra_lines + chr(10) if extra_lines else ""}
-Decide: BUY (accumulate over 1–2 weeks), HOLD (wait for better conditions), or AVOID (business concerns).
+    prompt = f"""You are an expert long-term investor. Analyze {ticker} ({name}) for a 6–18 month hold.
+{model_context}
 
-BUY criteria: positive revenue growth + healthy margins + reasonable valuation + clear catalyst
-HOLD criteria: good business but currently expensive or unclear direction
-AVOID criteria: declining revenue, margin compression, excessive debt, or structural headwinds
+STOCK: {ticker} | Price: ${price:.2f} | Sector: {sector}
 
-Suggested entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} | 12-month target: ${target:.2f} | R/R 1:{rr}
+FUNDAMENTALS: {fund_str}
 
-Write a thesis citing SPECIFIC numeric data from above. Each sentence must include at least one number.
+{extra_lines}
+
+ATR-14: ${atr_14:.2f} | Entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} (~3× ATR) | Target: ${target:.2f} | R/R 1:{rr}
+
+DECISION:
+- BUY: revenue growth + healthy margins + reasonable valuation + clear catalyst
+- HOLD: sound business but expensive, uncertain trajectory, or better entry available
+- AVOID: declining revenue, margin compression, excessive debt, or structural headwinds
+
+TRADE_TYPE must be: growth | value | dividend | turnaround | compounder | disruptor | platform | deep-tech | speculative
+
+Write 3 thesis sentences, EACH citing a specific numeric value from the data above. Do NOT reference RSI, MACD, ATR, or VWAP in the thesis.
 
 Respond ONLY with valid JSON, no markdown:
 {{
   "ticker": "{ticker}",
   "recommendation": "buy",
-  "trade_type": "growth",
+  "trade_type": "compounder",
   "entry_low": {entry_low},
   "entry_high": {entry_high},
   "stop_loss": {stop_loss},
   "target": {target},
   "risk_reward": "1:{rr}",
   "confidence": 7,
-  "thesis": "2 sentences with specific numeric data explaining the long-term BUY/HOLD/AVOID call.",
-  "catalyst": "Specific event or development that could move the stock in 6–12 months",
-  "key_risk": "Main risk that could permanently impair the long-term thesis"
+  "thesis": "3 sentences with specific numeric data explaining the BUY/HOLD/AVOID call.",
+  "catalyst": "Specific event or development that could move the stock in the next 6–18 months",
+  "key_risk": "Primary structural risk that could permanently impair the thesis"
 }}"""
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, _call_claude, prompt)
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1200))
 
     try:
         result = _parse_response(raw)
@@ -2509,7 +2608,8 @@ async def analyze_ticker_all_modes(
     insider_signal = insider if isinstance(insider, str) else ""
     earnings_data = earnings if isinstance(earnings, dict) else {}
 
-    price = fh_data.get("price") or quote_data.get("price") or ta_data.get("price") or 0
+    price = (fh_data.get("price") or fh_data.get("prev_close") or
+             quote_data.get("price") or ta_data.get("price") or 0)
     name = quote_data.get("name") or fh_data.get("name") or ticker
     change_pct_atm = fh_data.get("change_pct") or quote_data.get("change_pct", 0) or 0
     sector = quote_data.get("sector") or fh_data.get("sector") or ""
@@ -2742,7 +2842,7 @@ async def analyze_ticker_all_modes(
     )
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1400))
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1800))
 
     try:
         parsed = _parse_response(raw)
@@ -2789,16 +2889,23 @@ async def _analyze_ticker_discovery(ticker: str) -> Dict:
     from services import yahoo_finance as yf_svc
     from services import finnhub_service
 
-    quote, fund = await asyncio.gather(
+    quote, fund, quote_fh, analyst, earnings_raw = await asyncio.gather(
         yf_svc.get_quote(ticker),
         finnhub_service.get_fundamentals_mapped(ticker),
+        finnhub_service.get_quote(ticker),
+        finnhub_service.get_analyst_summary(ticker),
+        finnhub_service.get_ticker_earnings_data(ticker),
         return_exceptions=True,
     )
 
     quote_data = quote if isinstance(quote, dict) else {}
     fund_data = fund if isinstance(fund, dict) else {}
+    fh_data = quote_fh if isinstance(quote_fh, dict) else {}
+    analyst_data = analyst if isinstance(analyst, dict) else {}
+    earnings_data = earnings_raw if isinstance(earnings_raw, dict) else {}
 
-    price = quote_data.get("price") or 0
+    price = (fh_data.get("price") or fh_data.get("prev_close") or
+             quote_data.get("price") or 0)
     name = quote_data.get("name", ticker)
     sector = quote_data.get("sector", "")
     model = EQUITY_MODEL.get(ticker.upper(), "")
@@ -2841,6 +2948,34 @@ async def _analyze_ticker_discovery(ticker: str) -> Dict:
     }
     model_note = f"Business model: {model} — {disc_lenses.get(model, 'evaluate long-term compounding potential')}" if model else ""
 
+    # Analyst + earnings context
+    a_buy  = analyst_data.get("analyst_buy", 0) or 0
+    a_hold = analyst_data.get("analyst_hold", 0) or 0
+    a_sell = analyst_data.get("analyst_sell", 0) or 0
+    a_target = analyst_data.get("target_price")
+    analyst_line = ""
+    if (a_buy + a_hold + a_sell) > 0:
+        analyst_line = f"Analyst consensus: {a_buy}B/{a_hold}H/{a_sell}S"
+        if a_target and price:
+            analyst_line += f" | Street target ${a_target:.0f} ({(a_target-price)/price*100:+.0f}%)"
+
+    earnings_line = ""
+    if earnings_data:
+        nd = earnings_data.get("next_date")
+        surprise = earnings_data.get("last_surprise_pct")
+        if nd:
+            from datetime import date as _date
+            try:
+                days_out = (_date.fromisoformat(nd) - _date.today()).days
+                if days_out >= 0:
+                    earnings_line = f"Next earnings: {nd} ({days_out}d out)"
+                    if surprise is not None:
+                        earnings_line += f" | Last EPS surprise: {surprise:+.1f}%"
+            except Exception:
+                pass
+
+    extra_block = "\n".join(x for x in [analyst_line, earnings_line] if x)
+
     prompt = f"""You are an expert long-term investor evaluating 10-year holds. Evaluate {ticker} ({name}) for a patient, long-horizon investor.
 
 Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}
@@ -2848,21 +2983,21 @@ Stock: {ticker} | Price: ${price:.2f} | Sector: {sector}
 
 GROWTH METRICS:
 {fund_str}
-
-The key question is NOT "is this a tech disruptor?" — it is: "Would a patient investor be well-rewarded holding this for 10 years?"
+{(chr(10) + extra_block) if extra_block else ""}
+The key question: "Would a patient investor be well-rewarded holding this for 10 years?"
 Consider:
-1. Does this business have durable competitive advantages (brand, scale, switching costs, network effects, regulatory moat)?
-2. Can it grow its earnings or revenue meaningfully over the next decade?
-3. Is the market it operates in expanding, and does it have room to take more share?
-4. Would it survive and thrive through at least one full economic cycle?
+1. Durable competitive advantages (brand, scale, switching costs, network effects, regulatory moat)
+2. Ability to grow earnings or revenue meaningfully over the next decade
+3. Is the market expanding, and does it have room to take more share?
+4. Can it survive and thrive through at least one full economic cycle?
 
 Decide:
-- BUY: durable business, clear compounding path, attractive enough entry
-- HOLD: sound business but current valuation or growth trajectory makes the 10-year return uncertain
-- AVOID: structural decline risk, loss of pricing power, broken economics, or a fundamentally commoditized model — NOT merely because it lacks "platform moat"
+- BUY: durable business, clear compounding path, attractive entry
+- HOLD: sound business but valuation or growth trajectory makes the 10-year return uncertain
+- AVOID: structural decline risk, pricing power loss, broken economics — NOT merely for lacking a platform moat
 
-Suggested entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} (~35% wide) | 10-year base target: ${target:.2f} (2.5x)
-For high conviction (confidence ≥ 8): adjust target to 4x–8x if earnings compounding supports it.
+Suggested entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} (~35% wide) | Base target: ${target:.2f} (2.5x)
+High conviction (confidence ≥ 8): adjust target to 4–8x if earnings compounding supports it.
 
 Each thesis sentence must cite at least one specific numeric value. Do NOT reference RSI, MACD, or short-term technicals.
 
@@ -2877,13 +3012,13 @@ Respond ONLY with valid JSON, no markdown:
   "target": {target},
   "risk_reward": "1:{rr}",
   "confidence": 7,
-  "thesis": "2 sentences with specific growth metrics and moat explanation, or honest AVOID reasoning if no platform moat.",
+  "thesis": "3 sentences: moat quality, growth trajectory with specific metrics, valuation or risk-adjusted return rationale.",
   "catalyst": "Specific event or development that could accelerate the 10-year thesis",
   "key_risk": "Structural risk that could permanently impair the thesis (not just volatility)"
 }}"""
 
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(_executor, _call_claude, prompt)
+    raw = await loop.run_in_executor(_executor, lambda: _call_claude(prompt, max_tokens=1200))
 
     try:
         result = _parse_response(raw)
