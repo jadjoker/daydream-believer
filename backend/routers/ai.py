@@ -199,6 +199,21 @@ async def background_refresh_picks():
         _is_generating = False
 
 
+async def startup_prewarm():
+    """
+    Called once from the FastAPI lifespan on server start.
+    If picks aren't cached (e.g. after a fresh deploy), generates them in the
+    background so the first user sees picks quickly rather than triggering a
+    Claude call from their browser.
+    Sets _last_refresh_ts so manual refreshes work normally afterward.
+    """
+    global _last_refresh_ts
+    if get_cached("ai_picks_all") is not None:
+        return  # already cached — nothing to do
+    _last_refresh_ts = time.time()
+    await background_refresh_picks()
+
+
 @router.get("/picks")
 async def get_ai_picks(
     mode: str = Query("unified", pattern="^(unified|long|discovery)$"),

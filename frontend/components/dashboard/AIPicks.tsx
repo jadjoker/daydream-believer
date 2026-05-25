@@ -505,7 +505,7 @@ function PicksPanel({
 const POLL_INTERVAL_MS = 4000;
 const MAX_WAIT_MS = 120_000; // 2 minutes
 
-type Phase = "checking" | "generating" | "ready" | "error";
+type Phase = "checking" | "generating" | "ready" | "error" | "empty";
 
 function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) => void; onSimulate?: (t: string) => void }) {
   const [phase, setPhase] = useState<Phase>("checking");
@@ -570,24 +570,25 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
     stopPoll();
     stopTimer();
 
-    api.aiPicksStatus().then(async (s: any) => {
+    api.aiPicksStatus().then((s: any) => {
       if (s.has_picks) {
+        // Picks already cached — load immediately, no Claude call needed
         loadPicksFromCache();
-      } else {
-        // Start background generation, then poll status
+      } else if (s.generating) {
+        // Server startup pre-warm (or another user) already triggered generation
+        // — just poll silently, don't fire another aiRefresh()
         setPhase("generating");
         startRef.current = Date.now();
         timerRef.current = setInterval(() => setLoadingSeconds((n) => n + 1), 1000);
-        try { await api.aiRefresh(); } catch {}
         startPolling();
+      } else {
+        // Nothing cached, nothing generating — show the empty state.
+        // User must click "Generate" to trigger a Claude call.
+        setPhase("empty");
       }
     }).catch(() => {
-      // Status check failed — try generating anyway
-      setPhase("generating");
-      startRef.current = Date.now();
-      timerRef.current = setInterval(() => setLoadingSeconds((n) => n + 1), 1000);
-      api.aiRefresh().catch(() => {});
-      startPolling();
+      // Status check failed (backend cold-starting) — show empty state
+      setPhase("empty");
     });
 
     return () => { stopPoll(); stopTimer(); };
@@ -658,6 +659,9 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
               {phase === "generating" ? generatingMsg : "Checking…"}
             </span>
           )}
+          {phase === "empty" && (
+            <span className="text-[10px] text-zinc-700">Server warming up…</span>
+          )}
         </div>
       </div>
 
@@ -666,6 +670,20 @@ function AllPicks({ onTickerSelect, onSimulate }: { onTickerSelect: (t: string) 
       {phase === "checking" && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 space-y-2 animate-pulse">
           {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+        </div>
+      )}
+
+      {phase === "empty" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-10 flex flex-col items-center gap-3 text-center">
+          <Sparkles size={22} className="text-zinc-700" />
+          <p className="text-sm text-zinc-500">No picks generated yet.</p>
+          <button
+            onClick={handleRefresh}
+            className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 border border-zinc-700 hover:border-cyan-700 px-3 py-2 rounded-lg transition-colors"
+          >
+            <RefreshCw size={12} />
+            Generate picks
+          </button>
         </div>
       )}
 

@@ -8,11 +8,16 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import stocks, sentiment, options, news, screener, insider, earnings, market, ai, simulator
+from routers.ai import startup_prewarm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield  # picks are generated on-demand only, never pre-warmed on startup
+    # Pre-generate picks in the background on every server start.
+    # This means after a deploy the cache is warm within ~30s and no browser
+    # page-load ever needs to fire a Claude call to seed the picks.
+    asyncio.create_task(startup_prewarm())
+    yield
 
 
 app = FastAPI(
