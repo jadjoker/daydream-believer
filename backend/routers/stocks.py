@@ -25,7 +25,10 @@ async def search_ticker(q: str = Query(..., min_length=1)):
         results = []
         for item in data.get("quotes", []):
             symbol = item.get("symbol", "")
-            if not symbol or "." in symbol:  # skip ADRs / foreign exchanges
+            quote_type = item.get("quoteType", "")
+            if not symbol or "." in symbol or "=" in symbol:  # skip ADRs, foreign, forex
+                continue
+            if quote_type in ("CURRENCY", "CRYPTOCURRENCY", "INDEX"):
                 continue
             results.append({
                 "ticker": symbol,
